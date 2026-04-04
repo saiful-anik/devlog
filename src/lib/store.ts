@@ -3,6 +3,9 @@ export interface Task {
   title: string;
   status: 'backlog' | 'in-progress' | 'completed';
   createdAt: string;
+  description?: string;
+  screenshots?: string[];
+  order?: number;
 }
 
 export interface Project {
