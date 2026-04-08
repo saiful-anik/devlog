@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { Plus, Calendar } from "lucide-react";
-import { store, TimelineEvent } from "@/lib/store";
+import { store, TimelineEvent, getCachedTimeline, resolveImageSrc } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Timeline() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
@@ -12,12 +13,28 @@ export default function Timeline() {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
 
-  useEffect(() => { setEvents(store.getTimeline()); }, []);
+  useEffect(() => {
+    let active = true;
 
-  const addCustom = () => {
+    const load = async () => {
+      const timeline = await store.getTimeline();
+      if (active) setEvents(timeline);
+    };
+
+    void load();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useStoreSubscription(["timeline"], () => {
+    setEvents(getCachedTimeline());
+  });
+
+  const addCustom = async () => {
     if (!title.trim()) return;
-    store.addTimelineEvent({ type: "custom", title: title.trim(), description: desc.trim() });
-    setEvents(store.getTimeline());
+    await store.addTimelineEvent({ type: "custom", title: title.trim(), description: desc.trim() });
     setTitle("");
     setDesc("");
     setOpen(false);
@@ -47,7 +64,7 @@ export default function Timeline() {
             <div className="flex flex-col gap-4 mt-2">
               <Input placeholder="Event title" value={title} onChange={e => setTitle(e.target.value)} />
               <Textarea placeholder="Description (optional)" value={desc} onChange={e => setDesc(e.target.value)} />
-              <Button onClick={addCustom}>Add Event</Button>
+              <Button onClick={() => void addCustom()}>Add Event</Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -69,7 +86,7 @@ export default function Timeline() {
                 </p>
                 <p className="text-sm">{event.title}</p>
                 {event.description && <p className="text-sm text-muted-foreground mt-1">{event.description}</p>}
-                {event.image && <img src={event.image} alt="" className="mt-3 rounded-lg max-w-xs" />}
+                {event.image && <img src={resolveImageSrc(event.image)} alt="" className="mt-3 rounded-lg max-w-xs" />}
               </div>
             ))}
           </div>

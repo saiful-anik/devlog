@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, FolderKanban } from "lucide-react";
-import { store, Project } from "@/lib/store";
+import { store, Project, getCachedProjects } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -12,16 +13,33 @@ export default function Projects() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => { setProjects(store.getProjects()); }, []);
+  useEffect(() => {
+    let active = true;
 
-  const createProject = () => {
+    const load = async () => {
+      const projectsData = await store.getProjects();
+      if (active) setProjects(projectsData);
+    };
+
+    void load();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useStoreSubscription(["projects"], () => {
+    setProjects(getCachedProjects());
+  });
+
+  const createProject = async () => {
     if (!newName.trim()) return;
     const now = new Date().toISOString();
     const project: Project = { id: store.uid(), name: newName.trim(), tasks: [], screenshots: [], createdAt: now, updatedAt: now };
     const updated = [...projects, project];
-    store.saveProjects(updated);
+    await store.saveProjects(updated);
     setProjects(updated);
-    store.addTimelineEvent({ type: "project", title: `Project "${project.name}" created.`, description: "", projectName: project.name });
+    await store.addTimelineEvent({ type: "project", title: `Project "${project.name}" created.`, description: "", projectId: project.id, projectName: project.name });
     setNewName("");
     setOpen(false);
   };
@@ -35,8 +53,8 @@ export default function Projects() {
           <DialogContent>
             <DialogHeader><DialogTitle>Create New Project</DialogTitle></DialogHeader>
             <div className="flex flex-col gap-4 mt-2">
-              <Input placeholder="Project name" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && createProject()} />
-              <Button onClick={createProject}>Create</Button>
+              <Input placeholder="Project title" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && void createProject()} />
+              <Button onClick={() => void createProject()}>Create</Button>
             </div>
           </DialogContent>
         </Dialog>

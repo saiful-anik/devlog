@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Home, FolderKanban, FileText, Calendar, Settings } from "lucide-react";
+import { Calendar, FileText, FolderKanban, Home, Settings } from "lucide-react";
 
 const links = [
   { to: "/", label: "Dashboard", icon: Home },
@@ -13,7 +13,7 @@ export default function AppSidebar() {
   const location = useLocation();
 
   return (
-    <aside className="w-64 min-h-screen bg-sidebar flex flex-col border-r border-sidebar-border shrink-0">
+    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
       <div className="flex items-center gap-2 px-6 py-5">
         <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
           <FolderKanban className="w-4 h-4 text-primary-foreground" />

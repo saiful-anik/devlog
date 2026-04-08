@@ -1,21 +1,42 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { store, Note } from "@/lib/store";
+import { store, Note, getCachedNotes } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Notes() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [selected, setSelected] = useState<Note | null>(null);
 
   useEffect(() => {
-    const n = store.getNotes();
-    setNotes(n);
-    if (n.length > 0) setSelected(n[0]);
+    let active = true;
+
+    const load = async () => {
+      const n = await store.getNotes();
+      if (!active) return;
+      setNotes(n);
+      if (n.length > 0) setSelected(n[0]);
+    };
+
+    void load();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const saveAll = (updated: Note[]) => { store.saveNotes(updated); setNotes([...updated]); };
+  useStoreSubscription(["notes"], () => {
+    const cached = getCachedNotes();
+    setNotes(cached);
+    setSelected((current) => cached.find((note) => note.id === current?.id) ?? cached[0] ?? null);
+  });
+
+  const saveAll = (updated: Note[]) => {
+    setNotes([...updated]);
+    void store.saveNotes(updated);
+  };
 
   const createNote = () => {
     const now = new Date().toISOString();
