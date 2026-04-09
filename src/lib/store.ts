@@ -191,9 +191,10 @@ export function subscribeToStoreChanges(listener: StoreListener) {
   };
 }
 
-function notifyStoreChange(scope: StoreScope) {
-  // Skip notifications while there are pending syncs to avoid overwriting optimistic updates
-  if (pendingSyncOperations > 0) return;
+function notifyStoreChange(scope: StoreScope, force = false) {
+  // Skip notifications while there are pending syncs to avoid overwriting optimistic updates.
+  // Callers can force a notification for optimistic writes that should render immediately.
+  if (!force && pendingSyncOperations > 0) return;
 
   for (const listener of listeners) {
     listener(scope);
@@ -870,54 +871,38 @@ export const store = {
       timestamp: new Date().toISOString(),
     };
 
-    const userId = await getUserId();
-    if (userId && supabase) {
+    const nextTimeline = [newEvent, ...getCachedTimeline()];
+    setCachedTimeline(nextTimeline);
+    notifyStoreChange("timeline", true);
+
+    void (async () => {
+      const userId = await getUserId();
+      if (!userId || !supabase) return;
+
+      incrementPendingSync();
       try {
-        const { data, error } = await supabase
-          .from("timeline_events")
-          .insert({
-            id: newEvent.id,
-            user_id: userId,
-            project_id: await resolveTimelineProjectId(userId, newEvent.projectId),
-            event_type: newEvent.type,
-            payload: {
-              title: newEvent.title,
-              description: newEvent.description,
-              image: newEvent.image ?? null,
-              projectName: newEvent.projectName ?? null,
-            },
-            occurred_at: newEvent.timestamp,
-          })
-          .select("id, project_id, event_type, payload, occurred_at")
-          .single();
+        const { error } = await supabase.from("timeline_events").insert({
+          id: newEvent.id,
+          user_id: userId,
+          project_id: await resolveTimelineProjectId(userId, newEvent.projectId),
+          event_type: newEvent.type,
+          payload: {
+            title: newEvent.title,
+            description: newEvent.description,
+            image: newEvent.image ?? null,
+            projectName: newEvent.projectName ?? null,
+          },
+          occurred_at: newEvent.timestamp,
+        });
 
         if (error) throw error;
-
-        const remoteEvent: TimelineEvent = {
-          id: data.id,
-          type: data.event_type,
-          title: data.payload?.title ?? data.event_type,
-          description: data.payload?.description ?? "",
-          image: data.payload?.image ?? undefined,
-          projectId: data.project_id,
-          projectName: data.payload?.projectName ?? undefined,
-          timestamp: data.occurred_at,
-        };
-
-        const localTimeline = getCachedTimeline();
-        localTimeline.unshift(remoteEvent);
-        setCachedTimeline(localTimeline);
-        notifyStoreChange("timeline");
-        return remoteEvent;
+        decrementPendingSync(false);
       } catch (error) {
         warnFallback((error as Error).message);
+        decrementPendingSync(true);
       }
-    }
+    })();
 
-    const timeline = getCachedTimeline();
-    timeline.unshift(newEvent);
-    setCachedTimeline(timeline);
-    notifyStoreChange("timeline");
     return newEvent;
   },
 

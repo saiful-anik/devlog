@@ -5,12 +5,14 @@ import { store, Project, getCachedProjects } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Projects() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<Project[]>(getCachedProjects());
   const [newName, setNewName] = useState("");
   const [open, setOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -18,7 +20,9 @@ export default function Projects() {
 
     const load = async () => {
       const projectsData = await store.getProjects();
-      if (active) setProjects(projectsData);
+      if (!active) return;
+      setProjects(projectsData);
+      setIsLoading(false);
     };
 
     void load();
@@ -46,6 +50,24 @@ export default function Projects() {
 
   return (
     <div>
+      {isLoading ? (
+        <div className="space-y-8">
+          <Skeleton className="h-9 w-40" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="border border-border rounded-xl p-5 bg-card space-y-4">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-10 w-10 rounded-lg" />
+                  <Skeleton className="h-5 w-32" />
+                </div>
+                <Skeleton className="h-2 w-full" />
+                <Skeleton className="h-4 w-28" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold">Projects</h1>
         <Dialog open={open} onOpenChange={setOpen}>
@@ -84,6 +106,8 @@ export default function Projects() {
           </button>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

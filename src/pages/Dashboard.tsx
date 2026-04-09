@@ -5,13 +5,15 @@ import { store, Project, TimelineEvent, getCachedProjects, getCachedTimeline } f
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Dashboard() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [projects, setProjects] = useState<Project[]>(getCachedProjects());
+  const [timeline, setTimeline] = useState<TimelineEvent[]>(getCachedTimeline());
   const [newName, setNewName] = useState("");
   const [open, setOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -26,6 +28,7 @@ export default function Dashboard() {
       if (!active) return;
       setProjects(projectsData);
       setTimeline(timelineData);
+      setIsLoading(false);
     };
 
     void load();
@@ -54,9 +57,10 @@ export default function Dashboard() {
       updatedAt: now,
     };
     const updated = [...projects, project];
-    await store.saveProjects(updated);
     setProjects(updated);
-    await store.addTimelineEvent({
+
+    await store.saveProjects(updated);
+    void store.addTimelineEvent({
       type: "project",
       title: `Project "${project.name}" created.`,
       description: "",
@@ -81,6 +85,36 @@ export default function Dashboard() {
 
   return (
     <div>
+      {isLoading ? (
+        <div className="space-y-8">
+          <Skeleton className="h-9 w-48" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="border border-border rounded-xl p-6 bg-card space-y-4">
+              <Skeleton className="h-6 w-40" />
+              <Skeleton className="h-8 w-32" />
+              <Skeleton className="h-2 w-full" />
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+            <div className="border border-border rounded-xl p-6 bg-card space-y-4">
+              <Skeleton className="h-6 w-44" />
+              <Skeleton className="h-4 w-56" />
+              <div className="space-y-3">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div key={index} className="flex items-start gap-3">
+                    <Skeleton className="mt-1.5 h-2.5 w-2.5 rounded-full" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-3/4" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold">Dashboard</h1>
         <Dialog open={open} onOpenChange={setOpen}>
@@ -155,6 +189,8 @@ export default function Dashboard() {
           <button onClick={() => navigate("/timeline")} className="text-sm font-medium mt-4 block mx-auto hover:text-primary">View Timeline</button>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

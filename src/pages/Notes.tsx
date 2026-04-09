@@ -4,11 +4,14 @@ import { store, Note, getCachedNotes } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 
 export default function Notes() {
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [selected, setSelected] = useState<Note | null>(null);
+  const cached = getCachedNotes();
+  const [notes, setNotes] = useState<Note[]>(cached);
+  const [selected, setSelected] = useState<Note | null>(cached.length > 0 ? cached[0] : null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -17,7 +20,8 @@ export default function Notes() {
       const n = await store.getNotes();
       if (!active) return;
       setNotes(n);
-      if (n.length > 0) setSelected(n[0]);
+      if (n.length > 0 && !selected) setSelected(n[0]);
+      setIsLoading(false);
     };
 
     void load();
@@ -63,6 +67,24 @@ export default function Notes() {
 
   return (
     <div>
+      {isLoading ? (
+        <div className="space-y-8">
+          <Skeleton className="h-9 w-32" />
+          <div className="flex gap-6 min-h-[60vh]">
+            <div className="w-64 shrink-0 flex flex-col gap-2 border-r border-border pr-4">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <Skeleton key={index} className="h-9 w-full rounded-lg" />
+              ))}
+            </div>
+            <div className="flex-1 space-y-4">
+              <Skeleton className="h-9 w-2/3" />
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-[400px] w-full rounded-xl" />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold">Notes</h1>
         <Button onClick={createNote}><Plus className="w-4 h-4 mr-2" /> New Note</Button>
@@ -91,6 +113,8 @@ export default function Notes() {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

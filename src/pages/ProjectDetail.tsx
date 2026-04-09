@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 import {
   AlertDialog,
@@ -61,6 +62,7 @@ export default function ProjectDetail() {
   );
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingFilePreview, setPendingFilePreview] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const chooserFileRef = useRef<HTMLInputElement>(null);
   const dragPreviewRef = useRef<HTMLDivElement | null>(null);
 
@@ -74,11 +76,13 @@ export default function ProjectDetail() {
 
       if (!current) {
         setProject(null);
+        setIsLoading(false);
         return;
       }
 
       setProject(current);
       setEditName(current.name);
+      setIsLoading(false);
 
       const source = projects.find((item) => item.id === id) ?? null;
       const needsSave = source?.tasks.some(
@@ -158,6 +162,13 @@ export default function ProjectDetail() {
     setProject({ ...project });
     setTaskName("");
     setTaskOpen(false);
+    void store.addTimelineEvent({
+      type: "task",
+      title: task.title,
+      description: `Added to ${project.name}`,
+      projectId: project.id,
+      projectName: project.name,
+    });
 
     // Sync in background
     void (async () => {
@@ -167,13 +178,6 @@ export default function ProjectDetail() {
           item.id === project.id ? project : item,
         );
         await store.saveProjects(all);
-        await store.addTimelineEvent({
-          type: "task",
-          title: task.title,
-          description: `Added to ${project.name}`,
-          projectId: project.id,
-          projectName: project.name,
-        });
         store._internal_decrementPendingSync(false);
       } catch (error) {
         console.error("Failed to sync task:", error);
@@ -401,21 +405,21 @@ export default function ProjectDetail() {
     // Update UI immediately
     setProject({ ...project });
     setDeleteTaskId(null);
+    if (task) {
+      void store.addTimelineEvent({
+        type: "task",
+        title: `Task deleted: ${task.title}`,
+        description: "",
+        projectId: project.id,
+        projectName: project.name,
+      });
+    }
 
     // Sync in background
     void (async () => {
       store._internal_incrementPendingSync();
       try {
         await save(project);
-        if (task) {
-          await store.addTimelineEvent({
-            type: "task",
-            title: `Task deleted: ${task.title}`,
-            description: "",
-            projectId: project.id,
-            projectName: project.name,
-          });
-        }
         store._internal_decrementPendingSync(false);
       } catch (error) {
         console.error("Failed to delete task:", error);
@@ -460,24 +464,22 @@ export default function ProjectDetail() {
     // Update UI immediately
     setProject({ ...project });
     setDragTaskId(null);
+    if (previousStatus !== targetStatus) {
+      const statusLabel = targetStatus.replace("-", " ");
+      void store.addTimelineEvent({
+        type: "task",
+        title: `${moving.title}`,
+        description: `Moved from ${previousStatus.replace("-", " ")} to ${statusLabel}`,
+        projectId: project.id,
+        projectName: project.name,
+      });
+    }
 
     // Fire off backend updates without waiting
     void (async () => {
       store._internal_incrementPendingSync();
       try {
         await save(project);
-
-        // Create timeline event for task status change
-        if (previousStatus !== targetStatus) {
-          const statusLabel = targetStatus.replace("-", " ");
-          await store.addTimelineEvent({
-            type: "task",
-            title: `${moving.title}`,
-            description: `Moved from ${previousStatus.replace("-", " ")} to ${statusLabel}`,
-            projectId: project.id,
-            projectName: project.name,
-          });
-        }
         store._internal_decrementPendingSync(false);
       } catch (error) {
         console.error("Failed to move task:", error);
@@ -519,6 +521,24 @@ export default function ProjectDetail() {
     dragPreviewRef.current = preview;
     e.dataTransfer.setDragImage(preview, 20, 20);
   };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-4 w-80" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-[calc(100vh-320px)] overflow-hidden pb-4">
+          {Array.from({ length: 3 }).map((_, columnIndex) => (
+            <div key={columnIndex} className="flex flex-col overflow-hidden space-y-3">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-full min-h-0 rounded-lg" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (!project) return <div className="text-muted-foreground">Project not found.</div>;
 
