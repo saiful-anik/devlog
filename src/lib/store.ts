@@ -239,7 +239,6 @@ function warnFallback(reason: string) {
   lastFallbackReason = reason;
   if (warnedFallback) return;
   warnedFallback = true;
-  console.warn(`Supabase unavailable: ${reason}`);
 }
 
 async function stopRealtimeSync() {
@@ -581,36 +580,52 @@ async function saveProjectsRemote(
     })),
   );
 
-  const deleteTables = [
-    "task_screenshots",
-    "project_screenshots",
-    "tasks",
-    "projects",
-  ] as const;
+  const newProjectIds = new Set(normalizedProjects.map((p) => p.id));
+  const newTaskIds = new Set(normalizedProjects.flatMap((p) => p.tasks.map((t) => t.id)));
 
-  for (const table of deleteTables) {
-    const { error } = await supabase.from(table).delete().eq("user_id", userId);
-    if (error) throw error;
+  // Delete removed projects (cascade handles tasks/screenshots)
+  const { data: existingProjects } = await supabase
+    .from("projects")
+    .select("id")
+    .eq("user_id", userId);
+  const staleProjectIds = (existingProjects ?? [])
+    .map((r) => r.id)
+    .filter((id) => !newProjectIds.has(id));
+  if (staleProjectIds.length > 0) {
+    await supabase.from("projects").delete().in("id", staleProjectIds);
+  }
+
+  // Delete removed tasks
+  const { data: existingTasks } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("user_id", userId);
+  const staleTaskIds = (existingTasks ?? [])
+    .map((r) => r.id)
+    .filter((id) => !newTaskIds.has(id));
+  if (staleTaskIds.length > 0) {
+    await supabase.from("tasks").delete().in("id", staleTaskIds);
   }
 
   if (normalizedProjects.length === 0) return [];
 
+  // Upsert projects
   const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
     user_id: userId,
     title: project.name,
     description: "",
     created_at: project.createdAt,
-    updated_at: project.updatedAt,
+    updated_at: new Date().toISOString(),
   }));
-
-  const { error: projectInsertError } = await supabase
+  const { error: projectError } = await supabase
     .from("projects")
-    .insert(projectRows);
-  if (projectInsertError) throw projectInsertError;
+    .upsert(projectRows, { onConflict: "id" });
+  if (projectError) throw projectError;
 
+  // Upsert tasks
   const taskRows = normalizedProjects.flatMap((project) =>
-    project.tasks.map((task, index) => ({
+    project.tasks.map((task) => ({
       id: task.id,
       user_id: userId,
       project_id: project.id,
@@ -621,14 +636,18 @@ async function saveProjectsRemote(
       due_date: null,
     })),
   );
-
   if (taskRows.length > 0) {
-    const { error: taskInsertError } = await supabase.from("tasks").insert(taskRows);
-    if (taskInsertError) throw taskInsertError;
+    const { error: taskError } = await supabase
+      .from("tasks")
+      .upsert(taskRows, { onConflict: "id" });
+    if (taskError) throw taskError;
   }
 
+  // Screenshots: delete stale, then upsert current
+  // Project screenshots
+  await supabase.from("project_screenshots").delete().eq("user_id", userId);
   const projectScreenshotRows = normalizedProjects.flatMap((project) =>
-    project.screenshots.map((image, index) => ({
+    project.screenshots.map((image) => ({
       id: crypto.randomUUID(),
       user_id: userId,
       project_id: project.id,
@@ -636,17 +655,16 @@ async function saveProjectsRemote(
       caption: null,
     })),
   );
-
   if (projectScreenshotRows.length > 0) {
-    const { error: screenshotInsertError } = await supabase
-      .from("project_screenshots")
-      .insert(projectScreenshotRows);
-    if (screenshotInsertError) throw screenshotInsertError;
+    const { error } = await supabase.from("project_screenshots").insert(projectScreenshotRows);
+    if (error) throw error;
   }
 
+  // Task screenshots
+  await supabase.from("task_screenshots").delete().eq("user_id", userId);
   const taskScreenshotRows = normalizedProjects.flatMap((project) =>
     project.tasks.flatMap((task) =>
-      (task.screenshots ?? []).map((image, index) => ({
+      (task.screenshots ?? []).map((image) => ({
         id: crypto.randomUUID(),
         user_id: userId,
         task_id: task.id,
@@ -655,12 +673,9 @@ async function saveProjectsRemote(
       })),
     ),
   );
-
   if (taskScreenshotRows.length > 0) {
-    const { error: taskScreenshotInsertError } = await supabase
-      .from("task_screenshots")
-      .insert(taskScreenshotRows);
-    if (taskScreenshotInsertError) throw taskScreenshotInsertError;
+    const { error } = await supabase.from("task_screenshots").insert(taskScreenshotRows);
+    if (error) throw error;
   }
 
   return normalizedProjects;
@@ -688,14 +703,21 @@ async function getNotesRemote(userId: string): Promise<Note[]> {
 async function saveNotesRemote(userId: string, notes: Note[]) {
   if (!supabase) return;
 
-  const { error: deleteError } = await supabase
+  const newNoteIds = new Set(notes.map((n) => n.id));
+
+  // Delete removed notes
+  const { data: existing } = await supabase
     .from("notes")
-    .delete()
+    .select("id")
     .eq("user_id", userId);
-  if (deleteError) throw deleteError;
+  const staleIds = (existing ?? []).map((r) => r.id).filter((id) => !newNoteIds.has(id));
+  if (staleIds.length > 0) {
+    await supabase.from("notes").delete().in("id", staleIds);
+  }
 
   if (notes.length === 0) return;
 
+  // Upsert remaining
   const rows = notes.map((note) => ({
     id: note.id,
     user_id: userId,
@@ -704,8 +726,8 @@ async function saveNotesRemote(userId: string, notes: Note[]) {
     updated_at: note.updatedAt,
   }));
 
-  const { error: insertError } = await supabase.from("notes").insert(rows);
-  if (insertError) throw insertError;
+  const { error } = await supabase.from("notes").upsert(rows, { onConflict: "id" });
+  if (error) throw error;
 }
 
 async function getTimelineRemote(userId: string): Promise<TimelineEvent[]> {
@@ -734,14 +756,21 @@ async function getTimelineRemote(userId: string): Promise<TimelineEvent[]> {
 async function saveTimelineRemote(userId: string, timeline: TimelineEvent[]) {
   if (!supabase) return;
 
-  const { error: deleteError } = await supabase
+  const newIds = new Set(timeline.map((e) => e.id));
+
+  // Delete removed events
+  const { data: existing } = await supabase
     .from("timeline_events")
-    .delete()
+    .select("id")
     .eq("user_id", userId);
-  if (deleteError) throw deleteError;
+  const staleIds = (existing ?? []).map((r) => r.id).filter((id) => !newIds.has(id));
+  if (staleIds.length > 0) {
+    await supabase.from("timeline_events").delete().in("id", staleIds);
+  }
 
   if (timeline.length === 0) return;
 
+  // Upsert remaining
   const rows = await Promise.all(
     timeline.map(async (event) => ({
       id: event.id,
@@ -758,8 +787,8 @@ async function saveTimelineRemote(userId: string, timeline: TimelineEvent[]) {
     })),
   );
 
-  const { error: insertError } = await supabase.from("timeline_events").insert(rows);
-  if (insertError) throw insertError;
+  const { error } = await supabase.from("timeline_events").upsert(rows, { onConflict: "id" });
+  if (error) throw error;
 }
 
 export const store = {
