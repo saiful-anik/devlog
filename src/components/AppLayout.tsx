@@ -4,11 +4,13 @@ import { Github, LogOut } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getSession, logout, type AuthSession } from "@/lib/auth";
+import { useSyncStatus } from "@/hooks/use-sync-status";
 import AppSidebar from "./AppSidebar";
 
 export default function AppLayout() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const syncStatus = useSyncStatus();
 
   useEffect(() => {
     let isMounted = true;
@@ -40,8 +42,16 @@ export default function AppLayout() {
         <div className="mb-6 flex justify-end">
           <div className="flex w-full max-w-2xl flex-wrap items-center justify-end gap-2 rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-sm backdrop-blur">
             <Badge variant="outline" className="flex items-center gap-2 border-border bg-transparent px-3 py-1 text-xs font-medium">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Cloud sync
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  syncStatus === "syncing"
+                    ? "bg-yellow-500"
+                    : syncStatus === "error"
+                      ? "bg-red-500"
+                      : "bg-emerald-500"
+                }`}
+              />
+              {syncStatus === "syncing" ? "Syncing..." : syncStatus === "error" ? "Sync error" : "Cloud sync"}
             </Badge>
 
             <Badge variant="secondary" className="flex items-center gap-2 px-3 py-1 text-xs font-medium">

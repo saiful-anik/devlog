@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import JSZip from "jszip";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,20 @@ type BackupImageRef = {
   source: string;
   fileName: string;
 };
+
+type StorageUsage = {
+  bucketSize: number;
+  fileCount: number;
+  error?: string;
+};
+
+function formatBytes(bytes: number) {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+}
 
 function isDataUrl(value: string) {
   return value.startsWith("data:");
@@ -101,10 +115,65 @@ async function imageSourceToBackupFile(source: string, fallbackIndex: number) {
   };
 }
 
+async function calculateStorageUsage(): Promise<StorageUsage> {
+  if (!supabase) {
+    return { bucketSize: 0, fileCount: 0, error: "Supabase not configured" };
+  }
+
+  try {
+    const buckets = ["project-screenshot", "task-screenshot"];
+    let totalSize = 0;
+    let totalFiles = 0;
+
+    for (const bucket of buckets) {
+      try {
+        const { data: files, error } = await supabase.storage.from(bucket).list("", {
+          limit: 10000,
+        });
+
+        if (error) throw error;
+
+        if (files) {
+          files.forEach((file) => {
+            if (file.metadata?.size) {
+              totalSize += file.metadata.size;
+            }
+            totalFiles += 1;
+          });
+        }
+      } catch (err) {
+        console.warn(`Could not list bucket ${bucket}:`, err);
+      }
+    }
+
+    return { bucketSize: totalSize, fileCount: totalFiles };
+  } catch (error) {
+    console.error("Error calculating storage:", error);
+    return {
+      bucketSize: 0,
+      fileCount: 0,
+      error: "Could not fetch storage info",
+    };
+  }
+}
+
 export default function SettingsPage() {
   const navigate = useNavigate();
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
+  const [isLoadingStorage, setIsLoadingStorage] = useState(true);
+
+  useEffect(() => {
+    const fetchStorageUsage = async () => {
+      setIsLoadingStorage(true);
+      const usage = await calculateStorageUsage();
+      setStorageUsage(usage);
+      setIsLoadingStorage(false);
+    };
+
+    void fetchStorageUsage();
+  }, []);
 
   const downloadBackup = async () => {
     setIsBackingUp(true);
@@ -214,6 +283,38 @@ export default function SettingsPage() {
           <p className="text-sm text-muted-foreground">
             Your projects, notes, timeline, and screenshots are stored in Supabase and stay synced across devices.
           </p>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="mb-2 font-semibold">Storage Usage</h2>
+          {isLoadingStorage ? (
+            <p className="text-sm text-muted-foreground">Loading storage info...</p>
+          ) : storageUsage?.error ? (
+            <p className="text-sm text-destructive">{storageUsage.error}</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Images in cloud buckets</p>
+                <div className="text-right">
+                  <p className="font-semibold">{formatBytes(storageUsage?.bucketSize ?? 0)}</p>
+                  <p className="text-xs text-muted-foreground">{storageUsage?.fileCount ?? 0} files</p>
+                </div>
+              </div>
+              <div className="rounded-lg bg-muted p-2">
+                <div className="w-full bg-muted-foreground/20 rounded h-2">
+                  <div
+                    className="bg-blue-500 h-2 rounded"
+                    style={{
+                      width: Math.min(((storageUsage?.bucketSize ?? 0) / (100 * 1024 * 1024)) * 100, 100) + "%",
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatBytes(storageUsage?.bucketSize ?? 0)} of 100 MB (typical limit)
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="rounded-xl border border-border bg-card p-6">

@@ -105,6 +105,9 @@ export default function ProjectDetail() {
   }, [id]);
 
   useStoreSubscription(["projects"], () => {
+    // Skip subscription update while dragging to prevent reverting changes
+    if (dragTaskId) return;
+
     const current = normalizeProject(getCachedProjects().find((item) => item.id === id) ?? null);
     if (!current) {
       setProject(null);
@@ -137,7 +140,7 @@ export default function ProjectDetail() {
     return (inColumn[inColumn.length - 1].order ?? 0) + 1;
   };
 
-  const addTask = async () => {
+  const addTask = () => {
     if (!project || !taskName.trim()) return;
     const task: Task = {
       id: store.uid(),
@@ -150,18 +153,55 @@ export default function ProjectDetail() {
     };
     project.tasks.push(task);
     project.updatedAt = new Date().toISOString();
-    await save(project);
-    await store.addTimelineEvent({ type: "task", title: task.title, description: `Added to ${project.name}`, projectId: project.id, projectName: project.name });
+
+    // Update UI immediately
+    setProject({ ...project });
     setTaskName("");
     setTaskOpen(false);
+
+    // Sync in background
+    void (async () => {
+      store._internal_incrementPendingSync();
+      try {
+        const all = (await store.getProjects()).map((item) =>
+          item.id === project.id ? project : item,
+        );
+        await store.saveProjects(all);
+        await store.addTimelineEvent({
+          type: "task",
+          title: task.title,
+          description: `Added to ${project.name}`,
+          projectId: project.id,
+          projectName: project.name,
+        });
+        store._internal_decrementPendingSync(false);
+      } catch (error) {
+        console.error("Failed to sync task:", error);
+        store._internal_decrementPendingSync(true);
+      }
+    })();
   };
 
-  const renameProject = async () => {
+  const renameProject = () => {
     if (!project || !editName.trim()) return;
     project.name = editName.trim();
     project.updatedAt = new Date().toISOString();
-    await save(project);
+    
+    // Update UI immediately
+    setProject({ ...project });
     setEditOpen(false);
+
+    // Sync in background
+    void (async () => {
+      store._internal_incrementPendingSync();
+      try {
+        await save(project);
+        store._internal_decrementPendingSync(false);
+      } catch (error) {
+        console.error("Failed to sync project name:", error);
+        store._internal_decrementPendingSync(true);
+      }
+    })();
   };
 
   const readFileAsDataUrl = (file: File) =>
@@ -230,20 +270,22 @@ export default function ProjectDetail() {
     }
   };
 
-  const commitChosenImage = async () => {
+  const commitChosenImage = () => {
     if (!imagePickerTarget) return;
 
-    const source = pendingFile ?? (clipboardImage ? new File([await (await fetch(clipboardImage)).blob()], "clipboard-image") : null);
-    if (!source) return;
+    void (async () => {
+      const source = pendingFile ?? (clipboardImage ? new File([await (await fetch(clipboardImage)).blob()], "clipboard-image") : null);
+      if (!source) return;
 
-    if (imagePickerTarget === "project") {
-      await addProjectScreenshot(source);
-    } else {
-      if (!selectedTaskId) return;
-      await addTaskScreenshot(source, selectedTaskId);
-    }
+      if (imagePickerTarget === "project") {
+        await addProjectScreenshot(source);
+      } else {
+        if (!selectedTaskId) return;
+        await addTaskScreenshot(source, selectedTaskId);
+      }
 
-    closeImageChooser();
+      closeImageChooser();
+    })();
   };
 
   const addProjectScreenshot = async (file: File) => {
@@ -251,8 +293,20 @@ export default function ProjectDetail() {
     const data = await readFileAsDataUrl(file);
     project.screenshots.push(data);
     project.updatedAt = new Date().toISOString();
-    await save(project);
-    await store.addTimelineEvent({ type: "log", title: "Screenshot uploaded", description: "", projectId: project.id, projectName: project.name, image: data });
+    
+    // Update UI immediately
+    setProject({ ...project });
+
+    // Sync in background
+    store._internal_incrementPendingSync();
+    try {
+      await save(project);
+      await store.addTimelineEvent({ type: "log", title: "Screenshot uploaded", description: "", projectId: project.id, projectName: project.name, image: data });
+      store._internal_decrementPendingSync(false);
+    } catch (error) {
+      console.error("Failed to sync screenshot:", error);
+      store._internal_decrementPendingSync(true);
+    }
   };
 
   const addTaskScreenshot = async (file: File, taskId: string) => {
@@ -262,7 +316,19 @@ export default function ProjectDetail() {
     const data = await readFileAsDataUrl(file);
     task.screenshots = [...(task.screenshots ?? []), data];
     project.updatedAt = new Date().toISOString();
-    await save(project);
+    
+    // Update UI immediately
+    setProject({ ...project });
+
+    // Sync in background
+    store._internal_incrementPendingSync();
+    try {
+      await save(project);
+      store._internal_decrementPendingSync(false);
+    } catch (error) {
+      console.error("Failed to sync task screenshot:", error);
+      store._internal_decrementPendingSync(true);
+    }
   };
 
   const getClipboardImageFiles = (clipboardData: DataTransfer | null) => {
@@ -323,7 +389,7 @@ export default function ProjectDetail() {
     })();
   };
 
-  const confirmDeleteTask = async () => {
+  const confirmDeleteTask = () => {
     if (!project || !deleteTaskId) return;
     const task = project.tasks.find((item) => item.id === deleteTaskId);
     project.tasks = project.tasks.filter((item) => item.id !== deleteTaskId);
@@ -331,11 +397,31 @@ export default function ProjectDetail() {
     rebalanceStatus(project.tasks, "in-progress");
     rebalanceStatus(project.tasks, "completed");
     project.updatedAt = new Date().toISOString();
-    await save(project);
-    if (task) {
-      await store.addTimelineEvent({ type: "task", title: `Task deleted: ${task.title}`, description: "", projectId: project.id, projectName: project.name });
-    }
+    
+    // Update UI immediately
+    setProject({ ...project });
     setDeleteTaskId(null);
+
+    // Sync in background
+    void (async () => {
+      store._internal_incrementPendingSync();
+      try {
+        await save(project);
+        if (task) {
+          await store.addTimelineEvent({
+            type: "task",
+            title: `Task deleted: ${task.title}`,
+            description: "",
+            projectId: project.id,
+            projectName: project.name,
+          });
+        }
+        store._internal_decrementPendingSync(false);
+      } catch (error) {
+        console.error("Failed to delete task:", error);
+        store._internal_decrementPendingSync(true);
+      }
+    })();
   };
 
   const moveTask = (targetStatus: Task["status"], beforeTaskId?: string) => {
@@ -343,6 +429,8 @@ export default function ProjectDetail() {
 
     const moving = project.tasks.find((task) => task.id === dragTaskId);
     if (!moving) return;
+
+    const previousStatus = moving.status;
 
     const targetTasks = sortByOrder(
       project.tasks.filter((task) => task.status === targetStatus && task.id !== moving.id),
@@ -368,8 +456,34 @@ export default function ProjectDetail() {
     rebalanceStatus(project.tasks, "in-progress");
     rebalanceStatus(project.tasks, "completed");
     project.updatedAt = new Date().toISOString();
-    void save(project);
+
+    // Update UI immediately
+    setProject({ ...project });
     setDragTaskId(null);
+
+    // Fire off backend updates without waiting
+    void (async () => {
+      store._internal_incrementPendingSync();
+      try {
+        await save(project);
+
+        // Create timeline event for task status change
+        if (previousStatus !== targetStatus) {
+          const statusLabel = targetStatus.replace("-", " ");
+          await store.addTimelineEvent({
+            type: "task",
+            title: `${moving.title}`,
+            description: `Moved from ${previousStatus.replace("-", " ")} to ${statusLabel}`,
+            projectId: project.id,
+            projectName: project.name,
+          });
+        }
+        store._internal_decrementPendingSync(false);
+      } catch (error) {
+        console.error("Failed to move task:", error);
+        store._internal_decrementPendingSync(true);
+      }
+    })();
   };
 
   const clearDragPreview = () => {
@@ -440,7 +554,6 @@ export default function ProjectDetail() {
           <Button variant="outline" onClick={uploadScreenshot}><ImagePlus className="w-4 h-4 mr-1" /> Upload Screenshot</Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground mb-1">Tip: Press Ctrl+V here to paste image from clipboard.</p>
       <p className="text-sm text-muted-foreground mb-6">
         📅 Created on {new Date(project.createdAt).toLocaleDateString()} • Last updated {new Date(project.updatedAt).toLocaleDateString()}
       </p>
@@ -467,7 +580,7 @@ export default function ProjectDetail() {
                   <div
                     className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
                     onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => moveTask(col.key)}
+                    onDrop={() => void moveTask(col.key)}
                   >
                     {tasks.length === 0 && <p className="text-xs text-muted-foreground text-center py-6">No tasks</p>}
                     {tasks.map(task => (
@@ -478,7 +591,7 @@ export default function ProjectDetail() {
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => {
                           e.preventDefault();
-                          moveTask(col.key, task.id);
+                          void moveTask(col.key, task.id);
                         }}
                         onDragEnd={() => {
                           setDragTaskId(null);
@@ -536,8 +649,7 @@ export default function ProjectDetail() {
                   <ImagePlus className="w-4 h-4 mr-2" /> Add Screenshot
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">Tip: Press Ctrl+V in this dialog to paste image from clipboard.</p>
-
+              
               {(selectedTask.screenshots ?? []).length > 0 && (
                 <div className="grid grid-cols-2 gap-2">
                   {(selectedTask.screenshots ?? []).map((src, index) => (

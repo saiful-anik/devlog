@@ -46,8 +46,14 @@ export interface TimelineEvent {
 export type StoreScope = "projects" | "notes" | "timeline";
 
 type StoreListener = (scope: StoreScope) => void;
+type SyncStatusListener = (status: "idle" | "syncing" | "error") => void;
 
 const listeners = new Set<StoreListener>();
+const syncStatusListeners = new Set<SyncStatusListener>();
+
+let syncStatus: "idle" | "syncing" | "error" = "idle";
+let pendingSyncOperations = 0;
+let lastSyncError: string | null = null;
 
 let cachedProjects: Project[] = [];
 let cachedNotes: Note[] = [];
@@ -186,8 +192,42 @@ export function subscribeToStoreChanges(listener: StoreListener) {
 }
 
 function notifyStoreChange(scope: StoreScope) {
+  // Skip notifications while there are pending syncs to avoid overwriting optimistic updates
+  if (pendingSyncOperations > 0) return;
+
   for (const listener of listeners) {
     listener(scope);
+  }
+}
+
+function notifySyncStatus() {
+  for (const listener of syncStatusListeners) {
+    listener(syncStatus);
+  }
+}
+
+function updateSyncStatus(newStatus: "idle" | "syncing" | "error") {
+  if (syncStatus !== newStatus) {
+    syncStatus = newStatus;
+    notifySyncStatus();
+  }
+}
+
+function incrementPendingSync() {
+  pendingSyncOperations += 1;
+  updateSyncStatus("syncing");
+}
+
+function decrementPendingSync(hasError = false) {
+  pendingSyncOperations = Math.max(0, pendingSyncOperations - 1);
+  if (hasError) {
+    updateSyncStatus("error");
+  } else if (pendingSyncOperations === 0) {
+    updateSyncStatus("idle");
+    // Notify listeners that sync is complete so they can refresh from server
+    notifyStoreChange("projects");
+    notifyStoreChange("notes");
+    notifyStoreChange("timeline");
   }
 }
 
@@ -882,4 +922,16 @@ export const store = {
   },
 
   uid: () => crypto.randomUUID(),
+
+  getSyncStatus: () => syncStatus,
+
+  onSyncStatusChange(listener: SyncStatusListener) {
+    syncStatusListeners.add(listener);
+    return () => {
+      syncStatusListeners.delete(listener);
+    };
+  },
+
+  _internal_incrementPendingSync: incrementPendingSync,
+  _internal_decrementPendingSync: decrementPendingSync,
 };
