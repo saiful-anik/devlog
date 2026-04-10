@@ -3,6 +3,14 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const PROJECT_SCREENSHOT_BUCKET = "project-screenshot";
 const TASK_SCREENSHOT_BUCKET = "task-screenshot";
+export const MAX_SCREENSHOT_SIZE = 2 * 1024 * 1024; // 2MB
+
+export class FileSizeError extends Error {
+  constructor(public actualSize: number) {
+    super(`File too large (${(actualSize / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+    this.name = "FileSizeError";
+  }
+}
 
 export interface Task {
   id: string;
@@ -117,6 +125,11 @@ function dataUrlToBlob(dataUrl: string) {
 async function uploadImageToStorage(userId: string, bucket: string, imageDataUrl: string) {
   if (!supabase) throw new Error("Supabase unavailable");
   const { blob, mimeType } = dataUrlToBlob(imageDataUrl);
+
+  if (blob.size > MAX_SCREENSHOT_SIZE) {
+    throw new FileSizeError(blob.size);
+  }
+
   const ext = mimeType.split("/")[1] || "bin";
   const objectPath = `${userId}/${crypto.randomUUID()}.${ext}`;
 

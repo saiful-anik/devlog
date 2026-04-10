@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Pencil, ImagePlus } from "lucide-react";
-import { store, Project, Task, getCachedProjects, resolveImageSrc } from "@/lib/store";
+import { store, Project, Task, getCachedProjects, resolveImageSrc, MAX_SCREENSHOT_SIZE } from "@/lib/store";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -231,6 +232,12 @@ export default function ProjectDetail() {
         if (!imageType) continue;
 
         const blob = await item.getType(imageType);
+        if (blob.size > MAX_SCREENSHOT_SIZE) {
+          toast.error(`Clipboard image too large (${(blob.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+          setClipboardImage(null);
+          setClipboardStatus("error");
+          return;
+        }
         const dataUrl = await readFileAsDataUrl(new File([blob], "clipboard-image", { type: blob.type }));
         setClipboardImage(dataUrl);
         setClipboardStatus("ready");
@@ -266,6 +273,11 @@ export default function ProjectDetail() {
 
   const handleChooserFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
+    if (file && file.size > MAX_SCREENSHOT_SIZE) {
+      toast.error(`File too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+      e.target.value = "";
+      return;
+    }
     setPendingFile(file);
     if (file) {
       setPendingFilePreview(await readFileAsDataUrl(file));
@@ -308,7 +320,7 @@ export default function ProjectDetail() {
       await store.addTimelineEvent({ type: "log", title: "Screenshot uploaded", description: "", projectId: project.id, projectName: project.name, image: data });
       store._internal_decrementPendingSync(false);
     } catch (error) {
-      console.error("Failed to sync screenshot:", error);
+      toast.error((error as Error).message || "Failed to upload screenshot");
       store._internal_decrementPendingSync(true);
     }
   };
@@ -330,7 +342,7 @@ export default function ProjectDetail() {
       await save(project);
       store._internal_decrementPendingSync(false);
     } catch (error) {
-      console.error("Failed to sync task screenshot:", error);
+      toast.error((error as Error).message || "Failed to upload screenshot");
       store._internal_decrementPendingSync(true);
     }
   };

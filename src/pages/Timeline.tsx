@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Plus, Calendar, ImagePlus, X } from "lucide-react";
-import { store, TimelineEvent, getCachedTimeline, resolveImageSrc } from "@/lib/store";
+import { store, TimelineEvent, getCachedTimeline, resolveImageSrc, MAX_SCREENSHOT_SIZE } from "@/lib/store";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -43,6 +44,12 @@ export default function Timeline() {
         if (!imageType) continue;
 
         const blob = await item.getType(imageType);
+        if (blob.size > MAX_SCREENSHOT_SIZE) {
+          toast.error(`Clipboard image too large (${(blob.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+          setClipboardImage(null);
+          setClipboardStatus("error");
+          return;
+        }
         const dataUrl = await readFileAsDataUrl(new File([blob], "clipboard-image", { type: blob.type }));
         setClipboardImage(dataUrl);
         setClipboardStatus("ready");
@@ -102,6 +109,12 @@ export default function Timeline() {
     if (!file) {
       setScreenshot(null);
       setScreenshotPreview(null);
+      return;
+    }
+
+    if (file.size > MAX_SCREENSHOT_SIZE) {
+      toast.error(`File too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+      event.target.value = "";
       return;
     }
 
