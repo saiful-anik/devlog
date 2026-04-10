@@ -1,6 +1,8 @@
 import { supabase } from "@/lib/supabase";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
+const PROJECT_SCREENSHOT_BUCKET = "devlog-images";
+
 const FALLBACK_SCREENSHOT_SIZE = 2 * 1024 * 1024;
 
 export async function getScreenshotSizeLimit(): Promise<number> {
@@ -12,8 +14,13 @@ export function formatBytes(bytes: number): string {
 }
 
 export class FileSizeError extends Error {
-  constructor(public actualSize: number, public maxSize: number) {
-    super(`File too large (${formatBytes(actualSize)}). Max ${formatBytes(maxSize)} allowed.`);
+  constructor(
+    public actualSize: number,
+    public maxSize: number,
+  ) {
+    super(
+      `File too large (${formatBytes(actualSize)}). Max ${formatBytes(maxSize)} allowed.`,
+    );
     this.name = "FileSizeError";
   }
 }
@@ -24,7 +31,6 @@ export interface Task {
   status: "backlog" | "in-progress" | "completed";
   createdAt: string;
   description?: string;
-  reference?: string;
   order?: number;
 }
 
@@ -33,6 +39,7 @@ export interface Project {
   name: string;
   description?: string;
   tasks: Task[];
+  screenshots: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +87,7 @@ function cloneProjects(projects: Project[]) {
   return projects.map((project) => ({
     ...project,
     tasks: project.tasks.map((task) => ({ ...task })),
+    screenshots: [...project.screenshots],
   }));
 }
 
@@ -95,7 +103,9 @@ function isDataUrl(value: string) {
   return value.startsWith("data:");
 }
 
-function parseStoredImageRef(value: string): { bucket: string; objectPath: string } | null {
+function parseStoredImageRef(
+  value: string,
+): { bucket: string; objectPath: string } | null {
   if (!value || isDataUrl(value) || value.startsWith("http")) return null;
   const slashIndex = value.indexOf("/");
   if (slashIndex <= 0) return null;
@@ -114,8 +124,65 @@ export function resolveImageSrc(value?: string) {
   const ref = parseStoredImageRef(value);
   if (!ref) return value;
 
-  const { data } = supabase.storage.from(ref.bucket).getPublicUrl(ref.objectPath);
+  const { data } = supabase.storage
+    .from(ref.bucket)
+    .getPublicUrl(ref.objectPath);
   return data.publicUrl;
+}
+
+function dataUrlToBlob(value: string) {
+  const [header, payload] = value.split(",", 2);
+  const mimeType =
+    header.match(/data:(.*?);base64/)?.[1] ?? "application/octet-stream";
+  const binary = atob(payload ?? "");
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return { blob: new Blob([bytes], { type: mimeType }), mimeType };
+}
+
+async function uploadImageToStorage(userId: string, imageDataUrl: string) {
+  if (!supabase) throw new Error("Supabase unavailable");
+
+  const { blob, mimeType } = dataUrlToBlob(imageDataUrl);
+  const maxSize = await getScreenshotSizeLimit();
+  if (blob.size > maxSize) {
+    throw new FileSizeError(blob.size, maxSize);
+  }
+
+  const ext = mimeType.split("/")[1] || "bin";
+  const objectPath = `${userId}/${crypto.randomUUID()}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from(PROJECT_SCREENSHOT_BUCKET)
+    .upload(objectPath, blob, {
+      upsert: false,
+      contentType: mimeType,
+    });
+
+  if (error) throw error;
+  return `${PROJECT_SCREENSHOT_BUCKET}/${objectPath}`;
+}
+
+async function normalizeImageRef(userId: string, image: string) {
+  if (isDataUrl(image)) {
+    return uploadImageToStorage(userId, image);
+  }
+
+  if (image.startsWith("http")) {
+    const marker = `/object/public/${PROJECT_SCREENSHOT_BUCKET}/`;
+    const markerIndex = image.indexOf(marker);
+    if (markerIndex >= 0) {
+      return `${PROJECT_SCREENSHOT_BUCKET}/${image.slice(markerIndex + marker.length)}`;
+    }
+
+    return image;
+  }
+
+  return image;
 }
 
 export function getCachedProjects(): Project[] {
@@ -266,6 +333,7 @@ async function ensureRealtimeSync(userId: string) {
 
     attach("projects", "projects");
     attach("tasks", "projects");
+    attach("project_screenshots", "projects");
     attach("notes", "notes");
     attach("timeline_events", "timeline");
 
@@ -329,6 +397,13 @@ type TaskRow = {
   resource_path: string | null;
 };
 
+type ProjectScreenshotRow = {
+  id: string;
+  project_id: string;
+  file_path: string;
+  caption: string | null;
+};
+
 type NoteRow = {
   id: string;
   title: string | null;
@@ -341,14 +416,26 @@ type TimelineRow = {
   id: string;
   project_id: string | null;
   event_type: TimelineEvent["type"];
-  payload: { title?: string; description?: string; image?: string; projectName?: string } | null;
+  payload: {
+    title?: string;
+    description?: string;
+    image?: string;
+    projectName?: string;
+  } | null;
   occurred_at: string;
 };
 
 function deserializeNoteContent(rawContent: string) {
   try {
-    const parsed = JSON.parse(rawContent) as { title?: string; content?: string };
-    if (typeof parsed === "object" && parsed !== null && (parsed.title !== undefined || parsed.content !== undefined)) {
+    const parsed = JSON.parse(rawContent) as {
+      title?: string;
+      content?: string;
+    };
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed.title !== undefined || parsed.content !== undefined)
+    ) {
       return {
         title: parsed.title ?? "Untitled Note",
         content: parsed.content ?? "",
@@ -358,7 +445,8 @@ function deserializeNoteContent(rawContent: string) {
     // Keep backward compatibility for plain text content.
   }
 
-  const fallbackTitle = rawContent.trim().split("\n")[0]?.slice(0, 40) || "Untitled Note";
+  const fallbackTitle =
+    rawContent.trim().split("\n")[0]?.slice(0, 40) || "Untitled Note";
   return {
     title: fallbackTitle,
     content: rawContent,
@@ -398,18 +486,38 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
 
   const projectIds = (projectsRows ?? []).map((row) => row.id);
 
-  const tasksResult = projectIds.length
-    ? await supabase
-        .from("tasks")
-        .select("id, project_id, title, status, created_at, details, resource_path")
-        .eq("user_id", userId)
-        .in("project_id", projectIds)
-        .order("created_at", { ascending: true })
-    : { data: [] as TaskRow[], error: null };
+  const [tasksResult, projectScreenshotsResult] = await Promise.all([
+    projectIds.length
+      ? supabase
+          .from("tasks")
+          .select(
+            "id, project_id, title, status, created_at, details, resource_path",
+          )
+          .eq("user_id", userId)
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as TaskRow[], error: null }),
+    projectIds.length
+      ? supabase
+          .from("project_screenshots")
+          .select("id, project_id, file_path, caption")
+          .eq("user_id", userId)
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as ProjectScreenshotRow[], error: null }),
+  ]);
 
   if (tasksResult.error) throw tasksResult.error;
+  if (projectScreenshotsResult.error) throw projectScreenshotsResult.error;
 
   const tasksByProject = new Map<string, Task[]>();
+  const projectScreenshotsByProject = new Map<string, string[]>();
+
+  for (const row of projectScreenshotsResult.data ?? []) {
+    const list = projectScreenshotsByProject.get(row.project_id) ?? [];
+    list.push(row.file_path);
+    projectScreenshotsByProject.set(row.project_id, list);
+  }
 
   for (const row of tasksResult.data ?? []) {
     const list = tasksByProject.get(row.project_id) ?? [];
@@ -419,7 +527,6 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
       status: row.status,
       createdAt: row.created_at,
       description: row.details ?? "",
-      reference: row.resource_path ?? "",
       order: list.length,
     };
 
@@ -433,6 +540,7 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     description: row.description ?? "",
+    screenshots: projectScreenshotsByProject.get(row.id) ?? [],
     tasks: (tasksByProject.get(row.id) ?? []).sort(
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
@@ -445,13 +553,20 @@ async function saveProjectsRemote(
 ): Promise<Project[]> {
   if (!supabase) return projects;
 
-  const normalizedProjects: Project[] = projects.map((project) => ({
-    ...project,
-    tasks: project.tasks.map((task) => ({ ...task })),
-  }));
+  const normalizedProjects: Project[] = await Promise.all(
+    projects.map(async (project) => ({
+      ...project,
+      screenshots: await Promise.all(
+        project.screenshots.map((image) => normalizeImageRef(userId, image)),
+      ),
+      tasks: project.tasks.map((task) => ({ ...task })),
+    })),
+  );
 
   const newProjectIds = new Set(normalizedProjects.map((p) => p.id));
-  const newTaskIds = new Set(normalizedProjects.flatMap((p) => p.tasks.map((t) => t.id)));
+  const newTaskIds = new Set(
+    normalizedProjects.flatMap((p) => p.tasks.map((t) => t.id)),
+  );
 
   // Delete removed projects.
   const { data: existingProjects } = await supabase
@@ -503,7 +618,7 @@ async function saveProjectsRemote(
       status: task.status,
       created_at: task.createdAt,
       details: task.description ?? "",
-      resource_path: task.reference ?? null,
+      resource_path: null,
     })),
   );
   if (taskRows.length > 0) {
@@ -511,6 +626,23 @@ async function saveProjectsRemote(
       .from("tasks")
       .upsert(taskRows, { onConflict: "id" });
     if (taskError) throw taskError;
+  }
+
+  await supabase.from("project_screenshots").delete().eq("user_id", userId);
+  const projectScreenshotRows = normalizedProjects.flatMap((project) =>
+    project.screenshots.map((image) => ({
+      id: crypto.randomUUID(),
+      user_id: userId,
+      project_id: project.id,
+      file_path: image,
+      caption: null,
+    })),
+  );
+  if (projectScreenshotRows.length > 0) {
+    const { error: screenshotError } = await supabase
+      .from("project_screenshots")
+      .insert(projectScreenshotRows);
+    if (screenshotError) throw screenshotError;
   }
 
   return normalizedProjects;
@@ -546,7 +678,9 @@ async function saveNotesRemote(userId: string, notes: Note[]) {
     .from("notes")
     .select("id")
     .eq("user_id", userId);
-  const staleIds = (existing ?? []).map((r) => r.id).filter((id) => !newNoteIds.has(id));
+  const staleIds = (existing ?? [])
+    .map((r) => r.id)
+    .filter((id) => !newNoteIds.has(id));
   if (staleIds.length > 0) {
     await supabase.from("notes").delete().in("id", staleIds);
   }
@@ -563,7 +697,9 @@ async function saveNotesRemote(userId: string, notes: Note[]) {
     updated_at: note.updatedAt,
   }));
 
-  const { error } = await supabase.from("notes").upsert(rows, { onConflict: "id" });
+  const { error } = await supabase
+    .from("notes")
+    .upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 
@@ -600,7 +736,9 @@ async function saveTimelineRemote(userId: string, timeline: TimelineEvent[]) {
     .from("timeline_events")
     .select("id")
     .eq("user_id", userId);
-  const staleIds = (existing ?? []).map((r) => r.id).filter((id) => !newIds.has(id));
+  const staleIds = (existing ?? [])
+    .map((r) => r.id)
+    .filter((id) => !newIds.has(id));
   if (staleIds.length > 0) {
     await supabase.from("timeline_events").delete().in("id", staleIds);
   }
@@ -624,7 +762,9 @@ async function saveTimelineRemote(userId: string, timeline: TimelineEvent[]) {
     })),
   );
 
-  const { error } = await supabase.from("timeline_events").upsert(rows, { onConflict: "id" });
+  const { error } = await supabase
+    .from("timeline_events")
+    .upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 
@@ -750,7 +890,10 @@ export const store = {
         const { error } = await supabase.from("timeline_events").insert({
           id: newEvent.id,
           user_id: userId,
-          project_id: await resolveTimelineProjectId(userId, newEvent.projectId),
+          project_id: await resolveTimelineProjectId(
+            userId,
+            newEvent.projectId,
+          ),
           event_type: newEvent.type,
           payload: {
             title: newEvent.title,

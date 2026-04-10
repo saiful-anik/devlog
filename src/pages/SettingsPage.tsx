@@ -106,7 +106,9 @@ async function imageSourceToBackupFile(source: string, fallbackIndex: number) {
     throw new Error("Supabase storage unavailable.");
   }
 
-  const { data, error } = await supabase.storage.from(ref.bucket).download(ref.objectPath);
+  const { data, error } = await supabase.storage
+    .from(ref.bucket)
+    .download(ref.objectPath);
   if (error) throw error;
 
   return {
@@ -127,9 +129,11 @@ async function calculateStorageUsage(): Promise<StorageUsage> {
 
     for (const bucket of buckets) {
       try {
-        const { data: files, error } = await supabase.storage.from(bucket).list("", {
-          limit: 10000,
-        });
+        const { data: files, error } = await supabase.storage
+          .from(bucket)
+          .list("", {
+            limit: 10000,
+          });
 
         if (error) throw error;
 
@@ -204,10 +208,12 @@ export default function SettingsPage() {
         projects,
         notes,
         timeline,
-        images: Array.from(imageSources.values()).map(({ source, fileName }) => ({
-          source,
-          fileName,
-        })),
+        images: Array.from(imageSources.values()).map(
+          ({ source, fileName }) => ({
+            source,
+            fileName,
+          }),
+        ),
       };
 
       const zip = new JSZip();
@@ -216,7 +222,10 @@ export default function SettingsPage() {
       const imageEntries = Array.from(imageSources.values());
       await Promise.all(
         imageEntries.map(async ({ source }, index) => {
-          const { name, blob } = await imageSourceToBackupFile(source, index + 1);
+          const { name, blob } = await imageSourceToBackupFile(
+            source,
+            index + 1,
+          );
           zip.file(name, blob);
         }),
       );
@@ -251,11 +260,15 @@ export default function SettingsPage() {
         "timeline_events",
         "notes",
         "tasks",
+        "project_screenshots",
         "projects",
       ] as const;
 
       for (const table of tablesInDeleteOrder) {
-        const { error } = await supabase.from(table).delete().eq("user_id", session.id);
+        const { error } = await supabase
+          .from(table)
+          .delete()
+          .eq("user_id", session.id);
         if (error) throw error;
       }
 
@@ -274,23 +287,32 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-border bg-card p-6">
           <h2 className="mb-2 font-semibold">Cloud Sync</h2>
           <p className="text-sm text-muted-foreground">
-            Your projects, tasks, notes, and timeline are stored in Supabase and stay synced across devices.
+            Your projects, tasks, notes, and timeline are stored in Supabase and
+            stay synced across devices.
           </p>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-6">
           <h2 className="mb-2 font-semibold">Storage Usage</h2>
           {isLoadingStorage ? (
-            <p className="text-sm text-muted-foreground">Loading storage info...</p>
+            <p className="text-sm text-muted-foreground">
+              Loading storage info...
+            </p>
           ) : storageUsage?.error ? (
             <p className="text-sm text-destructive">{storageUsage.error}</p>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Images in cloud buckets</p>
+                <p className="text-sm text-muted-foreground">
+                  Images in cloud buckets
+                </p>
                 <div className="text-right">
-                  <p className="font-semibold">{formatBytes(storageUsage?.bucketSize ?? 0)}</p>
-                  <p className="text-xs text-muted-foreground">{storageUsage?.fileCount ?? 0} files</p>
+                  <p className="font-semibold">
+                    {formatBytes(storageUsage?.bucketSize ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {storageUsage?.fileCount ?? 0} files
+                  </p>
                 </div>
               </div>
               <div className="rounded-lg bg-muted p-2">
@@ -298,12 +320,19 @@ export default function SettingsPage() {
                   <div
                     className="bg-blue-500 h-2 rounded"
                     style={{
-                      width: Math.min(((storageUsage?.bucketSize ?? 0) / (100 * 1024 * 1024)) * 100, 100) + "%",
+                      width:
+                        Math.min(
+                          ((storageUsage?.bucketSize ?? 0) /
+                            (100 * 1024 * 1024)) *
+                            100,
+                          100,
+                        ) + "%",
                     }}
                   />
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {formatBytes(storageUsage?.bucketSize ?? 0)} of 100 MB (typical limit)
+                  {formatBytes(storageUsage?.bucketSize ?? 0)} of 100 MB
+                  (typical limit)
                 </p>
               </div>
             </div>
@@ -313,17 +342,26 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-border bg-card p-6">
           <h2 className="mb-2 font-semibold">Backup</h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            Download all your data as a ZIP backup with JSON plus bundled images.
+            Download all your data as a ZIP backup with JSON plus bundled
+            images.
           </p>
-          <Button type="button" variant="outline" onClick={() => void downloadBackup()} disabled={isBackingUp}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void downloadBackup()}
+            disabled={isBackingUp}
+          >
             {isBackingUp ? "Preparing backup..." : "Download Backup"}
           </Button>
         </div>
 
         <div className="rounded-xl border border-destructive/40 bg-card p-6">
-          <h2 className="mb-2 font-semibold text-destructive">Delete Account</h2>
+          <h2 className="mb-2 font-semibold text-destructive">
+            Delete Account
+          </h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            This deletes your cloud data (projects, tasks, notes, timeline) and signs you out.
+            This deletes your cloud data (projects, tasks, notes, timeline) and
+            signs you out.
           </p>
 
           <AlertDialog>
@@ -336,7 +374,8 @@ export default function SettingsPage() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete your account data?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This action is irreversible. All your synced data will be removed.
+                  This action is irreversible. All your synced data will be
+                  removed.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
