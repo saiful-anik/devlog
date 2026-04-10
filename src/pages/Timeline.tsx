@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Calendar, ImagePlus, X } from "lucide-react";
+import { Plus, Calendar, ImagePlus, X, FolderKanban, ListTodo, BookOpen, Sparkles } from "lucide-react";
 import { store, TimelineEvent, getCachedTimeline, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
+import type { Task } from "@/lib/store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -150,6 +151,75 @@ export default function Timeline() {
     return "Custom";
   };
 
+  const movedToStatus = (event: TimelineEvent): Task["status"] | null => {
+    if (event.type !== "task") return null;
+    const match = event.description.match(/\bto\s+(backlog|in progress|completed)\b/i);
+    if (!match?.[1]) return null;
+    const normalized = match[1].toLowerCase().replace(" ", "-");
+    if (normalized === "backlog" || normalized === "in-progress" || normalized === "completed") {
+      return normalized;
+    }
+    return null;
+  };
+
+  const eventStyle = (event: TimelineEvent) => {
+    const { type } = event;
+    if (type === "project") {
+      return {
+        icon: FolderKanban,
+        dot: "bg-emerald-500",
+        badge: "bg-emerald-500/20 text-white dark:text-emerald-100 border-emerald-500/40",
+      };
+    }
+
+    if (type === "task") {
+      const toStatus = movedToStatus(event);
+      if (toStatus === "completed") {
+        return {
+          icon: ListTodo,
+          dot: "bg-success",
+          badge: "bg-success/20 text-white dark:text-emerald-100 border-success/40",
+        };
+      }
+
+      if (toStatus === "in-progress") {
+        return {
+          icon: ListTodo,
+          dot: "bg-warning",
+          badge: "bg-warning/20 text-white dark:text-amber-100 border-warning/40",
+        };
+      }
+
+      if (toStatus === "backlog") {
+        return {
+          icon: ListTodo,
+          dot: "bg-primary",
+          badge: "bg-primary/20 text-white dark:text-blue-100 border-primary/40",
+        };
+      }
+
+      return {
+        icon: ListTodo,
+        dot: "bg-sky-500",
+        badge: "bg-sky-500/20 text-white dark:text-sky-100 border-sky-500/40",
+      };
+    }
+
+    if (type === "log") {
+      return {
+        icon: BookOpen,
+        dot: "bg-amber-500",
+        badge: "bg-amber-500/20 text-white dark:text-amber-100 border-amber-500/40",
+      };
+    }
+
+    return {
+      icon: Sparkles,
+      dot: "bg-violet-500",
+      badge: "bg-violet-500/20 text-white dark:text-violet-100 border-violet-500/40",
+    };
+  };
+
   return (
     <div>
       {isLoading ? (
@@ -264,9 +334,19 @@ export default function Timeline() {
           <div className="flex flex-col gap-3 ml-3 border-l-2 border-border pl-6">
             {dayEvents.map(event => (
               <div key={event.id} className="bg-card border border-border rounded-xl p-5">
-                <p className="text-xs text-muted-foreground mb-1">
-                  {typeLabel(event.type)} • {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </p>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${eventStyle(event).badge}`}>
+                    {(() => {
+                      const Icon = eventStyle(event).icon;
+                      return <Icon className="h-3.5 w-3.5" />;
+                    })()}
+                    {typeLabel(event.type)}
+                  </span>
+                  <span className={`h-2 w-2 rounded-full ${eventStyle(event).dot}`} />
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
                 <p className="text-sm">{event.title}</p>
                 {event.description && <p className="text-sm text-muted-foreground mt-1">{event.description}</p>}
                 {event.image && <img src={resolveImageSrc(event.image)} alt="" className="mt-3 rounded-lg max-w-xs" />}

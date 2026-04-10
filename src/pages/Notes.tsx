@@ -10,7 +10,10 @@ import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 export default function Notes() {
   const cached = getCachedNotes();
   const [notes, setNotes] = useState<Note[]>(cached);
+  const [savedNotes, setSavedNotes] = useState<Note[]>(cached);
   const [selected, setSelected] = useState<Note | null>(cached.length > 0 ? cached[0] : null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -20,7 +23,9 @@ export default function Notes() {
       const n = await store.getNotes();
       if (!active) return;
       setNotes(n);
+      setSavedNotes(n);
       if (n.length > 0 && !selected) setSelected(n[0]);
+      setIsDirty(false);
       setIsLoading(false);
     };
 
@@ -32,21 +37,39 @@ export default function Notes() {
   }, []);
 
   useStoreSubscription(["notes"], () => {
+    if (isDirty) return;
     const cached = getCachedNotes();
     setNotes(cached);
+    setSavedNotes(cached);
     setSelected((current) => cached.find((note) => note.id === current?.id) ?? cached[0] ?? null);
   });
 
-  const saveAll = (updated: Note[]) => {
+  const updateLocal = (updated: Note[]) => {
     setNotes([...updated]);
-    void store.saveNotes(updated);
+    setIsDirty(true);
+  };
+
+  const saveChanges = async () => {
+    if (!isDirty) return;
+    setIsSaving(true);
+    await store.saveNotes(notes);
+    setIsSaving(false);
+    setSavedNotes(notes.map((note) => ({ ...note })));
+    setIsDirty(false);
+  };
+
+  const discardChanges = () => {
+    const restored = savedNotes.map((note) => ({ ...note }));
+    setNotes(restored);
+    setSelected((current) => restored.find((note) => note.id === current?.id) ?? restored[0] ?? null);
+    setIsDirty(false);
   };
 
   const createNote = () => {
     const now = new Date().toISOString();
     const note: Note = { id: store.uid(), title: "Untitled Note", content: "", createdAt: now, updatedAt: now };
     const updated = [note, ...notes];
-    saveAll(updated);
+    updateLocal(updated);
     setSelected(note);
   };
 
@@ -55,13 +78,13 @@ export default function Notes() {
     selected[field] = value;
     selected.updatedAt = new Date().toISOString();
     const updated = notes.map(n => n.id === selected.id ? { ...selected } : n);
-    saveAll(updated);
+    updateLocal(updated);
     setSelected({ ...selected });
   };
 
   const deleteNote = (id: string) => {
     const updated = notes.filter(n => n.id !== id);
-    saveAll(updated);
+    updateLocal(updated);
     setSelected(updated[0] ?? null);
   };
 
@@ -87,7 +110,15 @@ export default function Notes() {
         <>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold">Notes</h1>
-        <Button onClick={createNote}><Plus className="w-4 h-4 mr-2" /> New Note</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={discardChanges} disabled={!isDirty || isSaving}>
+            Discard Changes
+          </Button>
+          <Button variant="outline" onClick={() => void saveChanges()} disabled={!isDirty || isSaving}>
+            {isSaving ? "Saving..." : "Save Changes"}
+          </Button>
+          <Button onClick={createNote}><Plus className="w-4 h-4 mr-2" /> New Note</Button>
+        </div>
       </div>
       <div className="flex gap-6 min-h-[60vh]">
         <div className="w-64 shrink-0 flex flex-col gap-1 border-r border-border pr-4">
@@ -105,6 +136,7 @@ export default function Notes() {
                 <Input value={selected.title} onChange={e => updateNote("title", e.target.value)} className="text-lg font-semibold bg-transparent border-none px-0 focus-visible:ring-0" />
                 <Button variant="ghost" size="icon" onClick={() => deleteNote(selected.id)}><Trash2 className="w-4 h-4 text-destructive" /></Button>
               </div>
+              {isDirty && <p className="text-xs text-warning">Unsaved changes</p>}
               <p className="text-xs text-muted-foreground">Last updated {new Date(selected.updatedAt).toLocaleString()}</p>
               <Textarea value={selected.content} onChange={e => updateNote("content", e.target.value)} placeholder="Start writing..." className="min-h-[400px] bg-card border-border resize-none" />
             </div>
