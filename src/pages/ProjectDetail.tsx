@@ -304,27 +304,39 @@ export default function ProjectDetail() {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", task.id);
 
-    const preview = document.createElement("div");
+    const source = e.currentTarget;
+    const sourceRect = source.getBoundingClientRect();
+    const sourceStyles = window.getComputedStyle(source);
+
+    const preview = source.cloneNode(true) as HTMLDivElement;
     preview.style.position = "fixed";
     preview.style.top = "-9999px";
     preview.style.left = "-9999px";
     preview.style.pointerEvents = "none";
-    preview.style.width = "280px";
-    preview.style.borderRadius = "12px";
-    preview.style.padding = "12px 14px";
-    preview.style.color = "hsl(240 15% 92%)";
-    preview.style.background = "rgba(45, 52, 78, 0.94)";
-    preview.style.border = "1px solid rgba(255, 255, 255, 0.22)";
-    preview.style.boxShadow = "0 14px 30px rgba(6, 12, 24, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.16)";
-    preview.style.backdropFilter = "blur(8px)";
-    preview.style.fontSize = "14px";
-    preview.style.fontWeight = "600";
-    preview.style.lineHeight = "1.3";
-    preview.textContent = task.title;
+    preview.style.width = `${sourceRect.width}px`;
+    preview.style.height = `${sourceRect.height}px`;
+    preview.style.margin = "0";
+    preview.style.transition = "none";
+    preview.style.boxShadow = "none";
+    preview.style.opacity = "1";
+    preview.style.filter = "none";
+    preview.style.backdropFilter = "none";
+    preview.style.backgroundColor = sourceStyles.backgroundColor;
+    preview.style.borderColor = sourceStyles.borderColor;
+    preview.style.borderStyle = sourceStyles.borderStyle;
+    preview.style.borderWidth = sourceStyles.borderWidth;
+    preview.style.borderRadius = sourceStyles.borderRadius;
+    preview.style.color = sourceStyles.color;
+    preview.style.fontSize = sourceStyles.fontSize;
+    preview.style.fontWeight = sourceStyles.fontWeight;
+    preview.style.lineHeight = sourceStyles.lineHeight;
+    preview.style.padding = sourceStyles.padding;
 
     document.body.appendChild(preview);
     dragPreviewRef.current = preview;
-    e.dataTransfer.setDragImage(preview, 20, 20);
+    const offsetX = (e.nativeEvent as DragEvent).offsetX ?? 0;
+    const offsetY = (e.nativeEvent as DragEvent).offsetY ?? 0;
+    e.dataTransfer.setDragImage(preview, offsetX, offsetY);
   };
 
   if (isLoading) {
