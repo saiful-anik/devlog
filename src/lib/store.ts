@@ -1,28 +1,10 @@
 import { supabase } from "@/lib/supabase";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
-const PROJECT_SCREENSHOT_BUCKET = "project-screenshot";
-const TASK_SCREENSHOT_BUCKET = "task-screenshot";
-const FALLBACK_SCREENSHOT_SIZE = 2 * 1024 * 1024; // fallback if fetch fails
+const FALLBACK_SCREENSHOT_SIZE = 2 * 1024 * 1024;
 
-const bucketSizeCache = new Map<string, number>();
-let bucketSizeFetchPromise: Promise<void> | null = null;
-
-async function fetchBucketLimits() {
-  if (!supabase) return;
-  const [p, t] = await Promise.all([
-    supabase.rpc("get_bucket_size_limit", { bucket_name: PROJECT_SCREENSHOT_BUCKET }),
-    supabase.rpc("get_bucket_size_limit", { bucket_name: TASK_SCREENSHOT_BUCKET }),
-  ]);
-  if (!p.error && typeof p.data === "number") bucketSizeCache.set(PROJECT_SCREENSHOT_BUCKET, p.data);
-  if (!t.error && typeof t.data === "number") bucketSizeCache.set(TASK_SCREENSHOT_BUCKET, t.data);
-}
-
-export async function getScreenshotSizeLimit(bucket: string = PROJECT_SCREENSHOT_BUCKET): Promise<number> {
-  if (bucketSizeCache.has(bucket)) return bucketSizeCache.get(bucket)!;
-  if (!bucketSizeFetchPromise) bucketSizeFetchPromise = fetchBucketLimits().catch(() => {});
-  await bucketSizeFetchPromise;
-  return bucketSizeCache.get(bucket) ?? FALLBACK_SCREENSHOT_SIZE;
+export async function getScreenshotSizeLimit(): Promise<number> {
+  return FALLBACK_SCREENSHOT_SIZE;
 }
 
 export function formatBytes(bytes: number): string {
@@ -42,7 +24,7 @@ export interface Task {
   status: "backlog" | "in-progress" | "completed";
   createdAt: string;
   description?: string;
-  screenshots?: string[];
+  reference?: string;
   order?: number;
 }
 
@@ -51,7 +33,6 @@ export interface Project {
   name: string;
   description?: string;
   tasks: Task[];
-  screenshots: string[]; // base64 data URLs
   createdAt: string;
   updatedAt: string;
 }
@@ -98,11 +79,7 @@ let realtimeSetupPromise: Promise<void> | null = null;
 function cloneProjects(projects: Project[]) {
   return projects.map((project) => ({
     ...project,
-    tasks: project.tasks.map((task) => ({
-      ...task,
-      screenshots: [...(task.screenshots ?? [])],
-    })),
-    screenshots: [...project.screenshots],
+    tasks: project.tasks.map((task) => ({ ...task })),
   }));
 }
 
@@ -128,63 +105,6 @@ function parseStoredImageRef(value: string): { bucket: string; objectPath: strin
   if (!bucket || !objectPath) return null;
 
   return { bucket, objectPath };
-}
-
-function dataUrlToBlob(dataUrl: string) {
-  const [meta, base64] = dataUrl.split(",");
-  if (!meta || !base64) throw new Error("Invalid image data URL.");
-
-  const mimeMatch = /data:([^;]+);base64/.exec(meta);
-  const mimeType = mimeMatch?.[1] ?? "application/octet-stream";
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-
-  return { blob: new Blob([bytes], { type: mimeType }), mimeType };
-}
-
-async function uploadImageToStorage(userId: string, bucket: string, imageDataUrl: string) {
-  if (!supabase) throw new Error("Supabase unavailable");
-  const { blob, mimeType } = dataUrlToBlob(imageDataUrl);
-
-  const maxSize = await getScreenshotSizeLimit(bucket);
-  if (blob.size > maxSize) {
-    throw new FileSizeError(blob.size, maxSize);
-  }
-
-  const ext = mimeType.split("/")[1] || "bin";
-  const objectPath = `${userId}/${crypto.randomUUID()}.${ext}`;
-
-  const { error } = await supabase.storage
-    .from(bucket)
-    .upload(objectPath, blob, {
-      upsert: false,
-      contentType: mimeType,
-    });
-
-  if (error) throw error;
-  return `${bucket}/${objectPath}`;
-}
-
-async function normalizeImageRef(userId: string, image: string, bucket: string) {
-  if (isDataUrl(image)) {
-    return uploadImageToStorage(userId, bucket, image);
-  }
-
-  if (image.startsWith("http")) {
-    const marker = `/object/public/${bucket}/`;
-    const markerIndex = image.indexOf(marker);
-    if (markerIndex >= 0) {
-      return `${bucket}/${image.slice(markerIndex + marker.length)}`;
-    }
-
-    return image;
-  }
-
-  return image;
 }
 
 export function resolveImageSrc(value?: string) {
@@ -346,8 +266,6 @@ async function ensureRealtimeSync(userId: string) {
 
     attach("projects", "projects");
     attach("tasks", "projects");
-    attach("project_screenshots", "projects");
-    attach("task_screenshots", "projects");
     attach("notes", "notes");
     attach("timeline_events", "timeline");
 
@@ -408,25 +326,12 @@ type TaskRow = {
   status: Task["status"];
   created_at: string;
   details: string | null;
-  due_date: string | null;
-};
-
-type ProjectScreenshotRow = {
-  id: string;
-  project_id: string;
-  file_path: string;
-  caption: string | null;
-};
-
-type TaskScreenshotRow = {
-  id: string;
-  task_id: string;
-  file_path: string;
-  caption: string | null;
+  resource_path: string | null;
 };
 
 type NoteRow = {
   id: string;
+  title: string | null;
   content: string;
   created_at: string;
   updated_at: string;
@@ -434,18 +339,11 @@ type NoteRow = {
 
 type TimelineRow = {
   id: string;
-  project_id: string;
+  project_id: string | null;
   event_type: TimelineEvent["type"];
   payload: { title?: string; description?: string; image?: string; projectName?: string } | null;
   occurred_at: string;
 };
-
-function serializeNoteContent(note: Note) {
-  return JSON.stringify({
-    title: note.title,
-    content: note.content,
-  });
-}
 
 function deserializeNoteContent(rawContent: string) {
   try {
@@ -470,36 +368,21 @@ function deserializeNoteContent(rawContent: string) {
 async function resolveTimelineProjectId(
   userId: string,
   preferredProjectId?: string,
-): Promise<string> {
+): Promise<string | null> {
   if (!supabase) throw new Error("Supabase unavailable");
 
-  if (preferredProjectId) {
-    const { data, error } = await supabase
-      .from("projects")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("id", preferredProjectId)
-      .limit(1)
-      .maybeSingle();
-
-    if (error) throw error;
-    if (data?.id) return data.id;
-  }
+  if (!preferredProjectId) return null;
 
   const { data, error } = await supabase
     .from("projects")
     .select("id")
     .eq("user_id", userId)
-    .order("created_at", { ascending: true })
+    .eq("id", preferredProjectId)
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-  if (!data?.id) {
-    throw new Error("Create a project first before adding timeline events.");
-  }
-
-  return data.id;
+  return data?.id ?? null;
 }
 
 async function getProjectsRemote(userId: string): Promise<Project[]> {
@@ -515,45 +398,18 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
 
   const projectIds = (projectsRows ?? []).map((row) => row.id);
 
-  const [tasksResult, projectScreenshotsResult, taskScreenshotsResult] =
-    await Promise.all([
-      projectIds.length
-        ? supabase
-            .from("tasks")
-            .select("id, project_id, title, status, created_at, details, due_date")
-            .eq("user_id", userId)
-            .in("project_id", projectIds)
-            .order("created_at", { ascending: true })
-        : Promise.resolve({ data: [] as TaskRow[], error: null }),
-      projectIds.length
-        ? supabase
-            .from("project_screenshots")
-            .select("id, project_id, file_path, caption")
-            .eq("user_id", userId)
-            .in("project_id", projectIds)
-            .order("created_at", { ascending: true })
-        : Promise.resolve({ data: [] as ProjectScreenshotRow[], error: null }),
-      projectIds.length
-        ? supabase
-            .from("task_screenshots")
-            .select("id, task_id, file_path, caption")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: true })
-        : Promise.resolve({ data: [] as TaskScreenshotRow[], error: null }),
-    ]);
+  const tasksResult = projectIds.length
+    ? await supabase
+        .from("tasks")
+        .select("id, project_id, title, status, created_at, details, resource_path")
+        .eq("user_id", userId)
+        .in("project_id", projectIds)
+        .order("created_at", { ascending: true })
+    : { data: [] as TaskRow[], error: null };
 
   if (tasksResult.error) throw tasksResult.error;
-  if (projectScreenshotsResult.error) throw projectScreenshotsResult.error;
-  if (taskScreenshotsResult.error) throw taskScreenshotsResult.error;
 
   const tasksByProject = new Map<string, Task[]>();
-  const taskScreenshotsByTask = new Map<string, string[]>();
-
-  for (const row of taskScreenshotsResult.data ?? []) {
-    const current = taskScreenshotsByTask.get(row.task_id) ?? [];
-    current.push(row.file_path);
-    taskScreenshotsByTask.set(row.task_id, current);
-  }
 
   for (const row of tasksResult.data ?? []) {
     const list = tasksByProject.get(row.project_id) ?? [];
@@ -563,19 +419,12 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
       status: row.status,
       createdAt: row.created_at,
       description: row.details ?? "",
+      reference: row.resource_path ?? "",
       order: list.length,
-      screenshots: taskScreenshotsByTask.get(row.id) ?? [],
     };
 
     list.push(task);
     tasksByProject.set(row.project_id, list);
-  }
-
-  const projectScreenshotsByProject = new Map<string, string[]>();
-  for (const row of projectScreenshotsResult.data ?? []) {
-    const current = projectScreenshotsByProject.get(row.project_id) ?? [];
-    current.push(row.file_path);
-    projectScreenshotsByProject.set(row.project_id, current);
   }
 
   return (projectsRows ?? []).map((row) => ({
@@ -587,7 +436,6 @@ async function getProjectsRemote(userId: string): Promise<Project[]> {
     tasks: (tasksByProject.get(row.id) ?? []).sort(
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
-    screenshots: projectScreenshotsByProject.get(row.id) ?? [],
   }));
 }
 
@@ -597,31 +445,15 @@ async function saveProjectsRemote(
 ): Promise<Project[]> {
   if (!supabase) return projects;
 
-  const normalizedProjects: Project[] = await Promise.all(
-    projects.map(async (project) => ({
-      ...project,
-      screenshots: await Promise.all(
-        project.screenshots.map((image) =>
-          normalizeImageRef(userId, image, PROJECT_SCREENSHOT_BUCKET),
-        ),
-      ),
-      tasks: await Promise.all(
-        project.tasks.map(async (task) => ({
-          ...task,
-          screenshots: await Promise.all(
-            (task.screenshots ?? []).map((image) =>
-              normalizeImageRef(userId, image, TASK_SCREENSHOT_BUCKET),
-            ),
-          ),
-        })),
-      ),
-    })),
-  );
+  const normalizedProjects: Project[] = projects.map((project) => ({
+    ...project,
+    tasks: project.tasks.map((task) => ({ ...task })),
+  }));
 
   const newProjectIds = new Set(normalizedProjects.map((p) => p.id));
   const newTaskIds = new Set(normalizedProjects.flatMap((p) => p.tasks.map((t) => t.id)));
 
-  // Delete removed projects (cascade handles tasks/screenshots)
+  // Delete removed projects.
   const { data: existingProjects } = await supabase
     .from("projects")
     .select("id")
@@ -652,7 +484,7 @@ async function saveProjectsRemote(
     id: project.id,
     user_id: userId,
     title: project.name,
-    description: "",
+    description: project.description ?? "",
     created_at: project.createdAt,
     updated_at: new Date().toISOString(),
   }));
@@ -671,7 +503,7 @@ async function saveProjectsRemote(
       status: task.status,
       created_at: task.createdAt,
       details: task.description ?? "",
-      due_date: null,
+      resource_path: task.reference ?? null,
     })),
   );
   if (taskRows.length > 0) {
@@ -679,41 +511,6 @@ async function saveProjectsRemote(
       .from("tasks")
       .upsert(taskRows, { onConflict: "id" });
     if (taskError) throw taskError;
-  }
-
-  // Screenshots: delete stale, then upsert current
-  // Project screenshots
-  await supabase.from("project_screenshots").delete().eq("user_id", userId);
-  const projectScreenshotRows = normalizedProjects.flatMap((project) =>
-    project.screenshots.map((image) => ({
-      id: crypto.randomUUID(),
-      user_id: userId,
-      project_id: project.id,
-      file_path: image,
-      caption: null,
-    })),
-  );
-  if (projectScreenshotRows.length > 0) {
-    const { error } = await supabase.from("project_screenshots").insert(projectScreenshotRows);
-    if (error) throw error;
-  }
-
-  // Task screenshots
-  await supabase.from("task_screenshots").delete().eq("user_id", userId);
-  const taskScreenshotRows = normalizedProjects.flatMap((project) =>
-    project.tasks.flatMap((task) =>
-      (task.screenshots ?? []).map((image) => ({
-        id: crypto.randomUUID(),
-        user_id: userId,
-        task_id: task.id,
-        file_path: image,
-        caption: null,
-      })),
-    ),
-  );
-  if (taskScreenshotRows.length > 0) {
-    const { error } = await supabase.from("task_screenshots").insert(taskScreenshotRows);
-    if (error) throw error;
   }
 
   return normalizedProjects;
@@ -724,7 +521,7 @@ async function getNotesRemote(userId: string): Promise<Note[]> {
 
   const { data, error } = await supabase
     .from("notes")
-    .select("id, content, created_at, updated_at")
+    .select("id, title, content, created_at, updated_at")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false });
 
@@ -732,7 +529,8 @@ async function getNotesRemote(userId: string): Promise<Note[]> {
 
   return (data ?? []).map((row: NoteRow) => ({
     id: row.id,
-    ...deserializeNoteContent(row.content),
+    title: row.title ?? deserializeNoteContent(row.content).title,
+    content: deserializeNoteContent(row.content).content,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -759,7 +557,8 @@ async function saveNotesRemote(userId: string, notes: Note[]) {
   const rows = notes.map((note) => ({
     id: note.id,
     user_id: userId,
-    content: serializeNoteContent(note),
+    title: note.title,
+    content: note.content,
     created_at: note.createdAt,
     updated_at: note.updatedAt,
   }));
@@ -785,7 +584,7 @@ async function getTimelineRemote(userId: string): Promise<TimelineEvent[]> {
     title: row.payload?.title ?? row.event_type,
     description: row.payload?.description ?? "",
     image: row.payload?.image ?? undefined,
-    projectId: row.project_id,
+    projectId: row.project_id ?? undefined,
     projectName: row.payload?.projectName ?? undefined,
     timestamp: row.occurred_at,
   }));

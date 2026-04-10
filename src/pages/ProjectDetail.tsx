@@ -1,12 +1,17 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Plus, Pencil, ImagePlus } from "lucide-react";
-import { store, Project, Task, getCachedProjects, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
-import { toast } from "sonner";
+import { ArrowLeft, Plus, Pencil } from "lucide-react";
+import { store, Project, Task, getCachedProjects } from "@/lib/store";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
@@ -33,7 +38,7 @@ function normalizeProject(project: Project | null): Project | null {
   const normalizedTasks = project.tasks.map((task, index) => ({
     ...task,
     description: task.description ?? "",
-    screenshots: task.screenshots ?? [],
+    reference: task.reference ?? "",
     order: typeof task.order === "number" ? task.order : index,
   }));
 
@@ -55,16 +60,7 @@ export default function ProjectDetail() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
-  const [imagePickerOpen, setImagePickerOpen] = useState(false);
-  const [imagePickerTarget, setImagePickerTarget] = useState<"project" | "task" | null>(null);
-  const [clipboardImage, setClipboardImage] = useState<string | null>(null);
-  const [clipboardStatus, setClipboardStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">(
-    "idle",
-  );
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [pendingFilePreview, setPendingFilePreview] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const chooserFileRef = useRef<HTMLInputElement>(null);
   const dragPreviewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -84,22 +80,6 @@ export default function ProjectDetail() {
       setProject(current);
       setEditName(current.name);
       setIsLoading(false);
-
-      const source = projects.find((item) => item.id === id) ?? null;
-      const needsSave = source?.tasks.some(
-        (task, index) =>
-          task.description === undefined ||
-          task.screenshots === undefined ||
-          task.order === undefined ||
-          task.order !== current.tasks[index].order,
-      ) ?? false;
-
-      if (needsSave) {
-        const all = projects.map((item) =>
-          item.id === current.id ? current : item,
-        );
-        await store.saveProjects(all);
-      }
     };
 
     void load();
@@ -110,7 +90,6 @@ export default function ProjectDetail() {
   }, [id]);
 
   useStoreSubscription(["projects"], () => {
-    // Skip subscription update while dragging to prevent reverting changes
     if (dragTaskId) return;
 
     const current = normalizeProject(getCachedProjects().find((item) => item.id === id) ?? null);
@@ -153,16 +132,16 @@ export default function ProjectDetail() {
       status: "backlog",
       createdAt: new Date().toISOString(),
       description: "",
-      screenshots: [],
+      reference: "",
       order: nextOrder(project.tasks, "backlog"),
     };
+
     project.tasks.push(task);
     project.updatedAt = new Date().toISOString();
-
-    // Update UI immediately
     setProject({ ...project });
     setTaskName("");
     setTaskOpen(false);
+
     void store.addTimelineEvent({
       type: "task",
       title: task.title,
@@ -171,7 +150,6 @@ export default function ProjectDetail() {
       projectName: project.name,
     });
 
-    // Sync in background
     void (async () => {
       store._internal_incrementPendingSync();
       try {
@@ -180,8 +158,7 @@ export default function ProjectDetail() {
         );
         await store.saveProjects(all);
         store._internal_decrementPendingSync(false);
-      } catch (error) {
-        console.error("Failed to sync task:", error);
+      } catch {
         store._internal_decrementPendingSync(true);
       }
     })();
@@ -191,185 +168,16 @@ export default function ProjectDetail() {
     if (!project || !editName.trim()) return;
     project.name = editName.trim();
     project.updatedAt = new Date().toISOString();
-    
-    // Update UI immediately
     setProject({ ...project });
     setEditOpen(false);
 
-    // Sync in background
     void (async () => {
       store._internal_incrementPendingSync();
       try {
         await save(project);
         store._internal_decrementPendingSync(false);
-      } catch (error) {
-        console.error("Failed to sync project name:", error);
+      } catch {
         store._internal_decrementPendingSync(true);
-      }
-    })();
-  };
-
-  const readFileAsDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("Failed to read image file"));
-      reader.readAsDataURL(file);
-    });
-
-  const readClipboardImage = async () => {
-    if (!navigator.clipboard?.read) {
-      setClipboardStatus("empty");
-      setClipboardImage(null);
-      return;
-    }
-
-    try {
-      setClipboardStatus("loading");
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith("image/"));
-        if (!imageType) continue;
-
-        const blob = await item.getType(imageType);
-        const maxSize = await getScreenshotSizeLimit();
-        if (blob.size > maxSize) {
-          toast.error(`Clipboard image too large (${formatBytes(blob.size)}). Max ${formatBytes(maxSize)} allowed.`);
-          setClipboardImage(null);
-          setClipboardStatus("error");
-          return;
-        }
-        const dataUrl = await readFileAsDataUrl(new File([blob], "clipboard-image", { type: blob.type }));
-        setClipboardImage(dataUrl);
-        setClipboardStatus("ready");
-        return;
-      }
-
-      setClipboardImage(null);
-      setClipboardStatus("empty");
-    } catch {
-      setClipboardImage(null);
-      setClipboardStatus("error");
-    }
-  };
-
-  const openImageChooser = (target: "project" | "task") => {
-    setImagePickerTarget(target);
-    setPendingFile(null);
-    setPendingFilePreview(null);
-    setClipboardImage(null);
-    setClipboardStatus("idle");
-    setImagePickerOpen(true);
-    void readClipboardImage();
-  };
-
-  const closeImageChooser = () => {
-    setImagePickerOpen(false);
-    setImagePickerTarget(null);
-    setPendingFile(null);
-    setPendingFilePreview(null);
-    setClipboardImage(null);
-    setClipboardStatus("idle");
-  };
-
-  const handleChooserFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    if (file) {
-      const maxSize = await getScreenshotSizeLimit(imagePickerTarget === "project" ? "project-screenshot" : "task-screenshot");
-      if (file.size > maxSize) {
-        toast.error(`File too large (${formatBytes(file.size)}). Max ${formatBytes(maxSize)} allowed.`);
-        e.target.value = "";
-        return;
-      }
-    }
-    setPendingFile(file);
-    if (file) {
-      setPendingFilePreview(await readFileAsDataUrl(file));
-    } else {
-      setPendingFilePreview(null);
-    }
-  };
-
-  const commitChosenImage = () => {
-    if (!imagePickerTarget) return;
-
-    void (async () => {
-      const source = pendingFile ?? (clipboardImage ? new File([await (await fetch(clipboardImage)).blob()], "clipboard-image") : null);
-      if (!source) return;
-
-      if (imagePickerTarget === "project") {
-        await addProjectScreenshot(source);
-      } else {
-        if (!selectedTaskId) return;
-        await addTaskScreenshot(source, selectedTaskId);
-      }
-
-      closeImageChooser();
-    })();
-  };
-
-  const addProjectScreenshot = async (file: File) => {
-    if (!project) return;
-    const data = await readFileAsDataUrl(file);
-    project.screenshots.push(data);
-    project.updatedAt = new Date().toISOString();
-    
-    // Update UI immediately
-    setProject({ ...project });
-
-    // Sync in background
-    store._internal_incrementPendingSync();
-    try {
-      await save(project);
-      await store.addTimelineEvent({ type: "log", title: "Screenshot uploaded", description: "", projectId: project.id, projectName: project.name, image: data });
-      store._internal_decrementPendingSync(false);
-    } catch (error) {
-      toast.error((error as Error).message || "Failed to upload screenshot");
-      store._internal_decrementPendingSync(true);
-    }
-  };
-
-  const addTaskScreenshot = async (file: File, taskId: string) => {
-    if (!project) return;
-    const task = project.tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    const data = await readFileAsDataUrl(file);
-    task.screenshots = [...(task.screenshots ?? []), data];
-    project.updatedAt = new Date().toISOString();
-    
-    // Update UI immediately
-    setProject({ ...project });
-
-    // Sync in background
-    store._internal_incrementPendingSync();
-    try {
-      await save(project);
-      store._internal_decrementPendingSync(false);
-    } catch (error) {
-      toast.error((error as Error).message || "Failed to upload screenshot");
-      store._internal_decrementPendingSync(true);
-    }
-  };
-
-  const getClipboardImageFiles = (clipboardData: DataTransfer | null) => {
-    if (!clipboardData) return [] as File[];
-    return Array.from(clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file));
-  };
-
-  const uploadScreenshot = () => {
-    openImageChooser("project");
-  };
-
-  const handleProjectPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    const files = getClipboardImageFiles(e.clipboardData);
-    if (files.length === 0) return;
-    e.preventDefault();
-    void (async () => {
-      for (const file of files) {
-        await addProjectScreenshot(file);
       }
     })();
   };
@@ -388,39 +196,25 @@ export default function ProjectDetail() {
     if (!project) return;
     const task = project.tasks.find((item) => item.id === taskId);
     if (!task) return;
+
     Object.assign(task, updates);
     project.updatedAt = new Date().toISOString();
     void save(project);
   };
 
-  const uploadTaskScreenshot = () => {
-    openImageChooser("task");
-  };
-
-  const handleTaskPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    if (!selectedTaskId) return;
-    const files = getClipboardImageFiles(e.clipboardData);
-    if (files.length === 0) return;
-    e.preventDefault();
-    void (async () => {
-      for (const file of files) {
-        await addTaskScreenshot(file, selectedTaskId);
-      }
-    })();
-  };
-
   const confirmDeleteTask = () => {
     if (!project || !deleteTaskId) return;
+
     const task = project.tasks.find((item) => item.id === deleteTaskId);
     project.tasks = project.tasks.filter((item) => item.id !== deleteTaskId);
     rebalanceStatus(project.tasks, "backlog");
     rebalanceStatus(project.tasks, "in-progress");
     rebalanceStatus(project.tasks, "completed");
     project.updatedAt = new Date().toISOString();
-    
-    // Update UI immediately
+
     setProject({ ...project });
     setDeleteTaskId(null);
+
     if (task) {
       void store.addTimelineEvent({
         type: "task",
@@ -431,14 +225,12 @@ export default function ProjectDetail() {
       });
     }
 
-    // Sync in background
     void (async () => {
       store._internal_incrementPendingSync();
       try {
         await save(project);
         store._internal_decrementPendingSync(false);
-      } catch (error) {
-        console.error("Failed to delete task:", error);
+      } catch {
         store._internal_decrementPendingSync(true);
       }
     })();
@@ -451,7 +243,6 @@ export default function ProjectDetail() {
     if (!moving) return;
 
     const previousStatus = moving.status;
-
     const targetTasks = sortByOrder(
       project.tasks.filter((task) => task.status === targetStatus && task.id !== moving.id),
     );
@@ -477,28 +268,26 @@ export default function ProjectDetail() {
     rebalanceStatus(project.tasks, "completed");
     project.updatedAt = new Date().toISOString();
 
-    // Update UI immediately
     setProject({ ...project });
     setDragTaskId(null);
+
     if (previousStatus !== targetStatus) {
       const statusLabel = targetStatus.replace("-", " ");
       void store.addTimelineEvent({
         type: "task",
-        title: `${moving.title}`,
+        title: moving.title,
         description: `Moved from ${previousStatus.replace("-", " ")} to ${statusLabel}`,
         projectId: project.id,
         projectName: project.name,
       });
     }
 
-    // Fire off backend updates without waiting
     void (async () => {
       store._internal_incrementPendingSync();
       try {
         await save(project);
         store._internal_decrementPendingSync(false);
-      } catch (error) {
-        console.error("Failed to move task:", error);
+      } catch {
         store._internal_decrementPendingSync(true);
       }
     })();
@@ -565,7 +354,10 @@ export default function ProjectDetail() {
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
           <DialogTrigger asChild><Button variant="ghost" size="sm"><Pencil className="w-4 h-4 mr-1" /> Edit Project Title</Button></DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Edit Project Title</DialogTitle></DialogHeader>
+            <DialogHeader>
+              <DialogTitle>Edit Project Title</DialogTitle>
+              <DialogDescription>Change the project name shown in your boards and timeline.</DialogDescription>
+            </DialogHeader>
             <div className="flex flex-col gap-4 mt-2">
               <Input placeholder="Project title" value={editName} onChange={e => setEditName(e.target.value)} onKeyDown={e => e.key === "Enter" && void renameProject()} />
               <Button onClick={() => void renameProject()}>Save</Button>
@@ -574,101 +366,86 @@ export default function ProjectDetail() {
         </Dialog>
       </div>
 
-      <div className="flex items-center gap-4 mb-1 flex-wrap" onPaste={handleProjectPaste}>
+      <div className="flex items-center gap-4 mb-1 flex-wrap">
         <h1 className="text-3xl font-bold">{project.name}</h1>
-        <div className="flex gap-2 ml-auto">
+        <div className="ml-auto">
           <Dialog open={taskOpen} onOpenChange={setTaskOpen}>
             <DialogTrigger asChild><Button><Plus className="w-4 h-4 mr-1" /> Add Task</Button></DialogTrigger>
             <DialogContent>
-              <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
+              <DialogHeader>
+                <DialogTitle>Add Task</DialogTitle>
+                <DialogDescription>Create a new task in the backlog column.</DialogDescription>
+              </DialogHeader>
               <div className="flex flex-col gap-4 mt-2">
                 <Input placeholder="Task title" value={taskName} onChange={e => setTaskName(e.target.value)} onKeyDown={e => e.key === "Enter" && void addTask()} />
                 <Button onClick={() => void addTask()}>Add</Button>
               </div>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" onClick={uploadScreenshot}><ImagePlus className="w-4 h-4 mr-1" /> Upload Screenshot</Button>
         </div>
       </div>
+
       <p className="text-sm text-muted-foreground mb-6">
-        📅 Created on {new Date(project.createdAt).toLocaleDateString()} • Last updated {new Date(project.updatedAt).toLocaleDateString()}
+        Created on {new Date(project.createdAt).toLocaleDateString()} - Last updated {new Date(project.updatedAt).toLocaleDateString()}
       </p>
 
-      <Tabs defaultValue="tasks">
-        <TabsList className="bg-secondary mb-6">
-          <TabsTrigger value="tasks">⫸ Tasks</TabsTrigger>
-          <TabsTrigger value="gallery">🖼 Gallery</TabsTrigger>
-        </TabsList>
-        <TabsContent value="tasks">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {COLUMNS.map(col => {
-              const tasks = sortByOrder(project.tasks.filter((task) => task.status === col.key));
-              return (
-                <div key={col.key}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className={`w-2.5 h-2.5 rounded-full ${col.color}`} />
-                    <span className="font-semibold text-sm">{col.label}</span>
-                    <span className="text-muted-foreground text-sm">({tasks.length})</span>
-                    {col.key === "backlog" && (
-                      <button onClick={() => setTaskOpen(true)} className="ml-auto text-muted-foreground hover:text-foreground"><Plus className="w-4 h-4" /></button>
-                    )}
-                  </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {COLUMNS.map(col => {
+          const tasks = sortByOrder(project.tasks.filter((task) => task.status === col.key));
+          return (
+            <div key={col.key}>
+              <div className="flex items-center gap-2 mb-3">
+                <span className={`w-2.5 h-2.5 rounded-full ${col.color}`} />
+                <span className="font-semibold text-sm">{col.label}</span>
+                <span className="text-muted-foreground text-sm">({tasks.length})</span>
+                {col.key === "backlog" && (
+                  <button onClick={() => setTaskOpen(true)} className="ml-auto text-muted-foreground hover:text-foreground"><Plus className="w-4 h-4" /></button>
+                )}
+              </div>
+              <div
+                className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => void moveTask(col.key)}
+              >
+                {tasks.length === 0 && <p className="text-xs text-muted-foreground text-center py-6">No tasks</p>}
+                {tasks.map(task => (
                   <div
-                    className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleTaskDragStart(e, task)}
                     onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => void moveTask(col.key)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      void moveTask(col.key, task.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragTaskId(null);
+                      clearDragPreview();
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setDeleteTaskId(task.id);
+                    }}
+                    onClick={() => openTaskDetails(task.id)}
+                    className="bg-card border border-border rounded-lg p-3 text-left text-sm hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
                   >
-                    {tasks.length === 0 && <p className="text-xs text-muted-foreground text-center py-6">No tasks</p>}
-                    {tasks.map(task => (
-                      <div
-                        key={task.id}
-                        draggable
-                        onDragStart={(e) => handleTaskDragStart(e, task)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          void moveTask(col.key, task.id);
-                        }}
-                        onDragEnd={() => {
-                          setDragTaskId(null);
-                          clearDragPreview();
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setDeleteTaskId(task.id);
-                        }}
-                        onClick={() => openTaskDetails(task.id)}
-                        className="bg-card border border-border rounded-lg p-3 text-left text-sm hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
-                      >
-                        <p>{task.title}</p>
-                      </div>
-                    ))}
+                    <p>{task.title}</p>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </TabsContent>
-        <TabsContent value="gallery">
-          {project.screenshots.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No screenshots yet. Upload some!</p>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {project.screenshots.map((src, i) => (
-                <img key={i} src={resolveImageSrc(src)} alt={`Screenshot ${i + 1}`} className="rounded-lg border border-border object-cover w-full aspect-video" />
-              ))}
+                ))}
+              </div>
             </div>
-          )}
-        </TabsContent>
-      </Tabs>
+          );
+        })}
+      </div>
 
       <Dialog open={taskDetailsOpen} onOpenChange={setTaskDetailsOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Task Details</DialogTitle>
+            <DialogDescription>Update task title, details, and URL or file path reference.</DialogDescription>
           </DialogHeader>
           {selectedTask ? (
-            <div className="flex flex-col gap-4 mt-2" onPaste={handleTaskPaste}>
+            <div className="flex flex-col gap-4 mt-2">
               <Input
                 value={selectedTask.title}
                 onChange={(e) => updateTask(selectedTask.id, { title: e.target.value })}
@@ -680,69 +457,15 @@ export default function ProjectDetail() {
                 placeholder="Task details"
                 className="min-h-[140px]"
               />
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" onClick={uploadTaskScreenshot}>
-                  <ImagePlus className="w-4 h-4 mr-2" /> Add Screenshot
-                </Button>
-              </div>
-              
-              {(selectedTask.screenshots ?? []).length > 0 && (
-                <div className="grid grid-cols-2 gap-2">
-                  {(selectedTask.screenshots ?? []).map((src, index) => (
-                    <img key={index} src={resolveImageSrc(src)} alt={`Task screenshot ${index + 1}`} className="rounded-md border border-border aspect-video object-cover w-full" />
-                  ))}
-                </div>
-              )}
+              <Input
+                value={selectedTask.reference ?? ""}
+                onChange={(e) => updateTask(selectedTask.id, { reference: e.target.value })}
+                placeholder="URL or file path (optional)"
+              />
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">Task not found.</p>
           )}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={imagePickerOpen} onOpenChange={(open) => (open ? setImagePickerOpen(true) : closeImageChooser())}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{imagePickerTarget === "task" ? "Add task screenshot" : "Upload screenshot"}</DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="rounded-lg border border-border bg-secondary/30 p-3">
-              <p className="mb-2 text-sm font-medium">Clipboard</p>
-              {clipboardStatus === "loading" && <p className="text-sm text-muted-foreground">Checking clipboard...</p>}
-              {clipboardStatus === "empty" && <p className="text-sm text-muted-foreground">No image in clipboard.</p>}
-              {clipboardStatus === "error" && <p className="text-sm text-muted-foreground">Clipboard access is unavailable. Use file upload instead.</p>}
-              {clipboardStatus === "ready" && clipboardImage && (
-                <img src={resolveImageSrc(clipboardImage)} alt="Clipboard preview" className="max-h-56 w-full rounded-md border border-border object-contain" />
-              )}
-            </div>
-
-            <div className="rounded-lg border border-dashed border-border p-3">
-              <p className="mb-2 text-sm font-medium">File explorer</p>
-              <input
-                ref={chooserFileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleChooserFileChange}
-              />
-              <Button type="button" variant="outline" className="w-full" onClick={() => chooserFileRef.current?.click()}>
-                Choose image from computer
-              </Button>
-              {pendingFilePreview && (
-                <img src={resolveImageSrc(pendingFilePreview)} alt="Selected file preview" className="mt-3 max-h-56 w-full rounded-md border border-border object-contain" />
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="outline" onClick={closeImageChooser}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={() => void commitChosenImage()} disabled={!pendingFile && !clipboardImage}>
-                Use image
-              </Button>
-            </div>
-          </div>
         </DialogContent>
       </Dialog>
 

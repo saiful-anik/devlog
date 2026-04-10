@@ -196,11 +196,6 @@ export default function SettingsPage() {
         });
       };
 
-      projects.forEach((project) => {
-        project.screenshots.forEach((source) => addSource(source));
-        project.tasks.forEach((task) => task.screenshots?.forEach((source) => addSource(source)));
-      });
-
       timeline.forEach((event) => addSource(event.image));
 
       const payload = {
@@ -253,8 +248,6 @@ export default function SettingsPage() {
     setIsDeleting(true);
     try {
       const tablesInDeleteOrder = [
-        "task_screenshots",
-        "project_screenshots",
         "timeline_events",
         "notes",
         "tasks",
@@ -281,7 +274,7 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-border bg-card p-6">
           <h2 className="mb-2 font-semibold">Cloud Sync</h2>
           <p className="text-sm text-muted-foreground">
-            Your projects, notes, timeline, and screenshots are stored in Supabase and stay synced across devices.
+            Your projects, tasks, notes, and timeline are stored in Supabase and stay synced across devices.
           </p>
         </div>
 
@@ -330,7 +323,7 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-destructive/40 bg-card p-6">
           <h2 className="mb-2 font-semibold text-destructive">Delete Account</h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            This deletes your cloud data (projects, tasks, notes, timeline, screenshots) and signs you out.
+            This deletes your cloud data (projects, tasks, notes, timeline) and signs you out.
           </p>
 
           <AlertDialog>

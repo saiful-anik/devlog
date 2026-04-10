@@ -13,15 +13,13 @@ type CheckResult = {
   detail: string;
 };
 
-const storageBuckets = ["project-screenshot", "task-screenshot"] as const;
+const storageBuckets: string[] = [];
 
 const checks = [
   { key: "projects", label: "projects", columns: "id, title, description, created_at, updated_at" },
-  { key: "tasks", label: "tasks", columns: "id, title, details, status, due_date, created_at, updated_at" },
-  { key: "notes", label: "notes", columns: "id, content, created_at, updated_at" },
+  { key: "tasks", label: "tasks", columns: "id, title, details, status, resource_path, created_at, updated_at" },
+  { key: "notes", label: "notes", columns: "id, title, content, created_at, updated_at" },
   { key: "timeline_events", label: "timeline_events", columns: "id, event_type, payload, occurred_at, created_at, updated_at" },
-  { key: "project_screenshots", label: "project_screenshots", columns: "id, file_path, caption, created_at, updated_at" },
-  { key: "task_screenshots", label: "task_screenshots", columns: "id, file_path, caption, created_at, updated_at" },
 ] as const;
 
 export default function Health() {

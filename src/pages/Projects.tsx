@@ -39,7 +39,7 @@ export default function Projects() {
   const createProject = async () => {
     if (!newName.trim()) return;
     const now = new Date().toISOString();
-    const project: Project = { id: store.uid(), name: newName.trim(), tasks: [], screenshots: [], createdAt: now, updatedAt: now };
+    const project: Project = { id: store.uid(), name: newName.trim(), tasks: [], createdAt: now, updatedAt: now };
     const updated = [...projects, project];
     await store.saveProjects(updated);
     setProjects(updated);

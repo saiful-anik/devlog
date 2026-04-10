@@ -52,7 +52,6 @@ export default function Dashboard() {
       id: store.uid(),
       name: newName.trim(),
       tasks: [],
-      screenshots: [],
       createdAt: now,
       updatedAt: now,
     };
