@@ -13,7 +13,7 @@ type CheckResult = {
   detail: string;
 };
 
-const storageBuckets: string[] = [];
+const storageBuckets = ["devlog-images"] as const;
 
 const checks = [
   { key: "projects", label: "projects", columns: "id, title, description, created_at, updated_at" },
@@ -78,7 +78,7 @@ export default function Health() {
             };
           }
 
-          const probePath = `health-check/${authSession.id}/${crypto.randomUUID()}.png`;
+          const probePath = `${authSession.id}/health-check/${crypto.randomUUID()}.png`;
 
           try {
             const { error: readError } = await supabase.storage
@@ -174,7 +174,7 @@ export default function Health() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <CardTitle className="text-3xl">Health Check</CardTitle>
-              <CardDescription>Verifies Supabase auth and database access.</CardDescription>
+              <CardDescription>Verifies Supabase auth, database tables, and storage bucket setup.</CardDescription>
             </div>
             <Badge variant={overallPass ? "default" : "destructive"} className="px-3 py-1 text-xs uppercase tracking-wide">
               {loading ? "Checking" : overallPass ? "Healthy" : "Needs attention"}
@@ -183,7 +183,7 @@ export default function Health() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-lg border border-border bg-secondary/20 p-4 text-sm text-muted-foreground">
-            This page checks the live Supabase connection using the real table schema.
+            This page checks live Supabase auth, table schema access, and storage bucket read/write permissions.
           </div>
 
           <div className="grid gap-3">

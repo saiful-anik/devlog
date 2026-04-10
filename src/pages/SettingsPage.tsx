@@ -121,7 +121,7 @@ async function calculateStorageUsage(): Promise<StorageUsage> {
   }
 
   try {
-    const buckets = ["project-screenshot", "task-screenshot"];
+    const buckets = ["devlog-images"];
     let totalSize = 0;
     let totalFiles = 0;
 
