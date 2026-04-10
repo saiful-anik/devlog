@@ -3,11 +3,35 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const PROJECT_SCREENSHOT_BUCKET = "project-screenshot";
 const TASK_SCREENSHOT_BUCKET = "task-screenshot";
-export const MAX_SCREENSHOT_SIZE = 2 * 1024 * 1024; // 2MB
+const FALLBACK_SCREENSHOT_SIZE = 2 * 1024 * 1024; // fallback if fetch fails
+
+const bucketSizeCache = new Map<string, number>();
+let bucketSizeFetchPromise: Promise<void> | null = null;
+
+async function fetchBucketLimits() {
+  if (!supabase) return;
+  const [p, t] = await Promise.all([
+    supabase.rpc("get_bucket_size_limit", { bucket_name: PROJECT_SCREENSHOT_BUCKET }),
+    supabase.rpc("get_bucket_size_limit", { bucket_name: TASK_SCREENSHOT_BUCKET }),
+  ]);
+  if (!p.error && typeof p.data === "number") bucketSizeCache.set(PROJECT_SCREENSHOT_BUCKET, p.data);
+  if (!t.error && typeof t.data === "number") bucketSizeCache.set(TASK_SCREENSHOT_BUCKET, t.data);
+}
+
+export async function getScreenshotSizeLimit(bucket: string = PROJECT_SCREENSHOT_BUCKET): Promise<number> {
+  if (bucketSizeCache.has(bucket)) return bucketSizeCache.get(bucket)!;
+  if (!bucketSizeFetchPromise) bucketSizeFetchPromise = fetchBucketLimits().catch(() => {});
+  await bucketSizeFetchPromise;
+  return bucketSizeCache.get(bucket) ?? FALLBACK_SCREENSHOT_SIZE;
+}
+
+export function formatBytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(2)}MB`;
+}
 
 export class FileSizeError extends Error {
-  constructor(public actualSize: number) {
-    super(`File too large (${(actualSize / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+  constructor(public actualSize: number, public maxSize: number) {
+    super(`File too large (${formatBytes(actualSize)}). Max ${formatBytes(maxSize)} allowed.`);
     this.name = "FileSizeError";
   }
 }
@@ -126,8 +150,9 @@ async function uploadImageToStorage(userId: string, bucket: string, imageDataUrl
   if (!supabase) throw new Error("Supabase unavailable");
   const { blob, mimeType } = dataUrlToBlob(imageDataUrl);
 
-  if (blob.size > MAX_SCREENSHOT_SIZE) {
-    throw new FileSizeError(blob.size);
+  const maxSize = await getScreenshotSizeLimit(bucket);
+  if (blob.size > maxSize) {
+    throw new FileSizeError(blob.size, maxSize);
   }
 
   const ext = mimeType.split("/")[1] || "bin";

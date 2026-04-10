@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Pencil, ImagePlus } from "lucide-react";
-import { store, Project, Task, getCachedProjects, resolveImageSrc, MAX_SCREENSHOT_SIZE } from "@/lib/store";
+import { store, Project, Task, getCachedProjects, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -232,8 +232,9 @@ export default function ProjectDetail() {
         if (!imageType) continue;
 
         const blob = await item.getType(imageType);
-        if (blob.size > MAX_SCREENSHOT_SIZE) {
-          toast.error(`Clipboard image too large (${(blob.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
+        const maxSize = await getScreenshotSizeLimit();
+        if (blob.size > maxSize) {
+          toast.error(`Clipboard image too large (${formatBytes(blob.size)}). Max ${formatBytes(maxSize)} allowed.`);
           setClipboardImage(null);
           setClipboardStatus("error");
           return;
@@ -273,10 +274,13 @@ export default function ProjectDetail() {
 
   const handleChooserFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
-    if (file && file.size > MAX_SCREENSHOT_SIZE) {
-      toast.error(`File too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Max 2MB allowed.`);
-      e.target.value = "";
-      return;
+    if (file) {
+      const maxSize = await getScreenshotSizeLimit(imagePickerTarget === "project" ? "project-screenshot" : "task-screenshot");
+      if (file.size > maxSize) {
+        toast.error(`File too large (${formatBytes(file.size)}). Max ${formatBytes(maxSize)} allowed.`);
+        e.target.value = "";
+        return;
+      }
     }
     setPendingFile(file);
     if (file) {
