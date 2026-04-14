@@ -113,4 +113,38 @@ describe("store schema behaviors", () => {
     expect(tasksUpsert?.payload[0].resource_path).toBe("C:/shots/task-1.png");
     expect(tasksUpsert?.payload[0].due_date).toBeUndefined();
   });
+
+  it("preserves each project's updatedAt when saving", async () => {
+    const { store } = await import("@/lib/store");
+
+    await store.saveProjects([
+      {
+        id: "project-1",
+        name: "Project A",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T01:00:00.000Z",
+        tasks: [],
+      },
+      {
+        id: "project-2",
+        name: "Project B",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T02:00:00.000Z",
+        tasks: [],
+      },
+    ]);
+
+    const projectsUpsert = upsertCalls.find((call) => call.table === "projects");
+    expect(projectsUpsert).toBeDefined();
+    expect(projectsUpsert?.payload[0].updated_at).toBe("2026-04-10T01:00:00.000Z");
+    expect(projectsUpsert?.payload[1].updated_at).toBe("2026-04-10T02:00:00.000Z");
+  });
+
+  it("does not start realtime sync during user id lookup", async () => {
+    const { store } = await import("@/lib/store");
+
+    await store.getProjects();
+
+    expect(mockSupabase.channel).not.toHaveBeenCalled();
+  });
 });

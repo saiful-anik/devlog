@@ -4,6 +4,7 @@ import { Github, LogOut } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getSession, logout, type AuthSession } from "@/lib/auth";
+import { startStoreSync } from "@/lib/store";
 import { useSyncStatus } from "@/hooks/use-sync-status";
 import AppSidebar from "./AppSidebar";
 
@@ -18,6 +19,9 @@ export default function AppLayout() {
     void getSession().then((authSession) => {
       if (!isMounted) return;
       setSession(authSession);
+      if (authSession) {
+        void startStoreSync(authSession.id);
+      }
     });
 
     return () => {

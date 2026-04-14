@@ -19,7 +19,7 @@ export default function Timeline() {
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [clipboardImage, setClipboardImage] = useState<string | null>(null);
   const [clipboardStatus, setClipboardStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const readFileAsDataUrl = (file: File) =>
@@ -70,10 +70,13 @@ export default function Timeline() {
     let active = true;
 
     const load = async () => {
-      const timeline = await store.getTimeline();
-      if (!active) return;
-      setEvents(timeline);
-      setIsLoading(false);
+      try {
+        const timeline = await store.getTimeline();
+        if (!active) return;
+        setEvents(timeline);
+      } finally {
+        if (active) setIsLoading(false);
+      }
     };
 
     void load();

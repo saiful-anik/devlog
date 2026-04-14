@@ -13,22 +13,26 @@ export default function Dashboard() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>(getCachedTimeline());
   const [newName, setNewName] = useState("");
   const [open, setOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
 
     const load = async () => {
-      const [projectsData, timelineData] = await Promise.all([
-        store.getProjects(),
-        store.getTimeline(),
-      ]);
+      try {
+        const [projectsResult, timelineResult] = await Promise.allSettled([
+          store.getProjects(),
+          store.getTimeline(),
+        ]);
 
-      if (!active) return;
-      setProjects(projectsData);
-      setTimeline(timelineData);
-      setIsLoading(false);
+        if (!active) return;
+
+        setProjects(projectsResult.status === "fulfilled" ? projectsResult.value : getCachedProjects());
+        setTimeline(timelineResult.status === "fulfilled" ? timelineResult.value : getCachedTimeline());
+      } finally {
+        if (active) setIsLoading(false);
+      }
     };
 
     void load();

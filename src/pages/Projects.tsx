@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, FolderKanban } from "lucide-react";
 import { store, Project, getCachedProjects } from "@/lib/store";
@@ -7,22 +7,30 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
+import { useSyncStatus } from "@/hooks/use-sync-status";
 
 export default function Projects() {
-  const [projects, setProjects] = useState<Project[]>(getCachedProjects());
+  const initialProjects = getCachedProjects();
+  const [projects, setProjects] = useState<Project[]>(initialProjects);
   const [newName, setNewName] = useState("");
   const [open, setOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(initialProjects.length === 0);
+  const syncStatus = useSyncStatus();
   const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
 
     const load = async () => {
-      const projectsData = await store.getProjects();
-      if (!active) return;
-      setProjects(projectsData);
-      setIsLoading(false);
+      try {
+        const projectsResult = await store.getProjects();
+
+        if (!active) return;
+
+        setProjects(projectsResult);
+      } finally {
+        if (active) setIsLoading(false);
+      }
     };
 
     void load();
@@ -48,6 +56,21 @@ export default function Projects() {
     setOpen(false);
   };
 
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => {
+      const aUpdated = Date.parse(a.updatedAt);
+      const bUpdated = Date.parse(b.updatedAt);
+      const aCreated = Date.parse(a.createdAt);
+      const bCreated = Date.parse(b.createdAt);
+      const aTime = Number.isNaN(aUpdated) ? (Number.isNaN(aCreated) ? 0 : aCreated) : aUpdated;
+      const bTime = Number.isNaN(bUpdated) ? (Number.isNaN(bCreated) ? 0 : bCreated) : bUpdated;
+
+      const delta = bTime - aTime;
+      if (delta !== 0) return delta;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+  }, [projects]);
+
   return (
     <div>
       {isLoading ? (
@@ -69,7 +92,14 @@ export default function Projects() {
       ) : (
         <>
       <div className="flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold">Projects</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold">Projects</h1>
+          {syncStatus !== "idle" && (
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${syncStatus === "error" ? "bg-red-500/15 text-red-500" : "bg-amber-500/15 text-amber-500"}`}>
+              {syncStatus === "error" ? "Sync error" : "Syncing..."}
+            </span>
+          )}
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button><Plus className="w-4 h-4 mr-2" /> New Project</Button></DialogTrigger>
           <DialogContent>
@@ -82,15 +112,27 @@ export default function Projects() {
         </Dialog>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {projects.map(p => {
+        {sortedProjects.map(p => {
           const completed = p.tasks.filter(t => t.status === "completed").length;
           const total = p.tasks.length;
           const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+          const isDone = total > 0 && completed === total;
           return (
-            <button key={p.id} onClick={() => navigate(`/projects/${p.id}`)} className="border border-border rounded-xl p-5 bg-card text-left hover:border-primary/50 transition-colors">
+            <button
+              key={p.id}
+              onClick={() => navigate(`/projects/${p.id}`)}
+              className={`border border-border rounded-xl p-5 text-left hover:border-primary/50 transition-colors ${
+                isDone ? "bg-card opacity-60" : "bg-card"
+              }`}
+            >
               <div className="flex items-center gap-2 mb-3">
                 <FolderKanban className="w-5 h-5 text-primary" />
                 <h3 className="font-semibold truncate">{p.name}</h3>
+                {isDone && (
+                  <span className="ml-auto rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                    Completed
+                  </span>
+                )}
               </div>
               <div className="w-full h-1.5 bg-secondary rounded-full overflow-hidden mb-2">
                 <div className="h-full bg-primary rounded-full" style={{ width: `${pct}%` }} />
@@ -99,7 +141,7 @@ export default function Projects() {
             </button>
           );
         })}
-        {projects.length === 0 && (
+        {sortedProjects.length === 0 && (
           <button onClick={() => setOpen(true)} className="border-2 border-dashed border-border rounded-xl p-12 flex flex-col items-center justify-center gap-3 hover:border-primary/50 transition-colors col-span-full max-w-md">
             <Plus className="w-6 h-6 text-muted-foreground" />
             <span className="text-muted-foreground">Create your first project</span>
