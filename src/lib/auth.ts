@@ -43,6 +43,9 @@ export async function signInWithGitHub(redirectPath = "/") {
     provider: "github",
     options: {
       redirectTo: redirectTo.toString(),
+      queryParams: {
+        prompt: "select_account",
+      },
     },
   });
 
@@ -52,5 +55,5 @@ export async function signInWithGitHub(redirectPath = "/") {
 export async function logout(): Promise<void> {
   if (!supabase) return;
   await resetStoreSync();
-  await supabase.auth.signOut();
+  await supabase.auth.signOut({ scope: "global" });
 }

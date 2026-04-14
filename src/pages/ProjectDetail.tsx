@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Plus, Pencil } from "lucide-react";
-import { store, Project, Task, getCachedProjects } from "@/lib/store";
+import { ArrowLeft, Plus, Pencil, ImagePlus, X } from "lucide-react";
+import { store, Project, Task, getCachedProjects, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +25,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
 
 const COLUMNS: { key: Task["status"]; label: string; color: string }[] = [
   { key: "backlog", label: "Backlog", color: "bg-primary" },
@@ -58,10 +59,83 @@ export default function ProjectDetail() {
   const [editName, setEditName] = useState("");
   const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskDraft, setTaskDraft] = useState<{ title: string; description: string; reference: string } | null>(null);
+  const [clipboardStatus, setClipboardStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const dragPreviewRef = useRef<HTMLDivElement | null>(null);
+  const screenshotInputRef = useRef<HTMLInputElement | null>(null);
+
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error("Failed to read screenshot"));
+      reader.readAsDataURL(file);
+    });
+
+  const readClipboardImage = async () => {
+    if (!navigator.clipboard?.read) {
+      setClipboardStatus("empty");
+      return;
+    }
+
+    try {
+      setClipboardStatus("loading");
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+
+        const blob = await item.getType(imageType);
+        const maxSize = await getScreenshotSizeLimit();
+        if (blob.size > maxSize) {
+          toast.error(`Clipboard image too large (${formatBytes(blob.size)}). Max ${formatBytes(maxSize)} allowed.`);
+          setClipboardStatus("error");
+          return;
+        }
+
+        const dataUrl = await readFileAsDataUrl(new File([blob], "clipboard-image", { type: blob.type }));
+        setTaskDraft((prev) => {
+          if (!prev) return prev;
+          if (prev.reference) return prev;
+          return {
+            ...prev,
+            reference: dataUrl,
+          };
+        });
+        setClipboardStatus("ready");
+        return;
+      }
+
+      setClipboardStatus("empty");
+    } catch {
+      setClipboardStatus("error");
+    }
+  };
+
+  const handleScreenshotChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) return;
+
+    const maxSize = await getScreenshotSizeLimit();
+    if (file.size > maxSize) {
+      toast.error(`File too large (${formatBytes(file.size)}). Max ${formatBytes(maxSize)} allowed.`);
+      event.target.value = "";
+      return;
+    }
+
+    const dataUrl = await readFileAsDataUrl(file);
+    setTaskDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        reference: dataUrl,
+      };
+    });
+    setClipboardStatus("idle");
+  };
 
   useEffect(() => {
     let active = true;
@@ -188,18 +262,69 @@ export default function ProjectDetail() {
   }, [project, selectedTaskId]);
 
   const openTaskDetails = (taskId: string) => {
-    setSelectedTaskId(taskId);
-    setTaskDetailsOpen(true);
-  };
-
-  const updateTask = (taskId: string, updates: Partial<Task>) => {
     if (!project) return;
     const task = project.tasks.find((item) => item.id === taskId);
     if (!task) return;
 
-    Object.assign(task, updates);
-    project.updatedAt = new Date().toISOString();
-    void save(project);
+    setSelectedTaskId(taskId);
+    setTaskDraft({
+      title: task.title,
+      description: task.description ?? "",
+      reference: task.reference ?? "",
+    });
+    setClipboardStatus("idle");
+    setTaskDetailsOpen(true);
+    void readClipboardImage();
+  };
+
+  const closeTaskDetails = () => {
+    setTaskDetailsOpen(false);
+    setSelectedTaskId(null);
+    setTaskDraft(null);
+    setClipboardStatus("idle");
+    if (screenshotInputRef.current) screenshotInputRef.current.value = "";
+  };
+
+  const saveTaskDetails = () => {
+    if (project && selectedTaskId && taskDraft) {
+      const task = project.tasks.find((item) => item.id === selectedTaskId);
+
+      if (task) {
+        const hasChanges =
+          task.title !== taskDraft.title ||
+          (task.description ?? "") !== taskDraft.description ||
+          (task.reference ?? "") !== taskDraft.reference;
+
+        if (hasChanges) {
+          task.title = taskDraft.title;
+          task.description = taskDraft.description;
+          task.reference = taskDraft.reference;
+          project.updatedAt = new Date().toISOString();
+          setProject({ ...project });
+
+          void (async () => {
+            store._internal_incrementPendingSync();
+            try {
+              await save(project);
+              store._internal_decrementPendingSync(false);
+            } catch {
+              store._internal_decrementPendingSync(true);
+            }
+          })();
+        }
+      }
+    }
+
+    closeTaskDetails();
+  };
+
+  const handleTaskDetailsOpenChange = (open: boolean) => {
+    if (open) {
+      setTaskDetailsOpen(true);
+      return;
+    }
+
+    closeTaskDetails();
   };
 
   const confirmDeleteTask = () => {
@@ -450,30 +575,108 @@ export default function ProjectDetail() {
         })}
       </div>
 
-      <Dialog open={taskDetailsOpen} onOpenChange={setTaskDetailsOpen}>
+      <Dialog open={taskDetailsOpen} onOpenChange={handleTaskDetailsOpenChange}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Task Details</DialogTitle>
-            <DialogDescription>Update task title, details, and URL or file path reference.</DialogDescription>
+            <DialogDescription>Update task title, details, and add an optional screenshot.</DialogDescription>
           </DialogHeader>
           {selectedTask ? (
             <div className="flex flex-col gap-4 mt-2">
               <Input
-                value={selectedTask.title}
-                onChange={(e) => updateTask(selectedTask.id, { title: e.target.value })}
+                value={taskDraft?.title ?? selectedTask.title}
+                onChange={(e) =>
+                  setTaskDraft((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          title: e.target.value,
+                        }
+                      : prev,
+                  )
+                }
                 placeholder="Task title"
               />
               <Textarea
-                value={selectedTask.description ?? ""}
-                onChange={(e) => updateTask(selectedTask.id, { description: e.target.value })}
+                value={taskDraft?.description ?? selectedTask.description ?? ""}
+                onChange={(e) =>
+                  setTaskDraft((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          description: e.target.value,
+                        }
+                      : prev,
+                  )
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    closeTaskDetails();
+                    return;
+                  }
+
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    saveTaskDetails();
+                  }
+                }}
                 placeholder="Task details"
                 className="min-h-[140px]"
               />
-              <Input
-                value={selectedTask.reference ?? ""}
-                onChange={(e) => updateTask(selectedTask.id, { reference: e.target.value })}
-                placeholder="URL or file path (optional)"
+
+              <input
+                ref={screenshotInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => void handleScreenshotChange(e)}
               />
+              <div className="rounded-md border border-border p-3">
+                <p className="mb-2 text-sm font-medium">Screenshot</p>
+                {clipboardStatus === "loading" && <p className="text-xs text-muted-foreground">Checking clipboard...</p>}
+                {clipboardStatus === "empty" && <p className="text-xs text-muted-foreground">No image found in clipboard.</p>}
+                {clipboardStatus === "error" && <p className="text-xs text-muted-foreground">Clipboard access unavailable. Use file upload.</p>}
+                {clipboardStatus === "ready" && !taskDraft?.reference && (
+                  <p className="text-xs text-muted-foreground">Image found in clipboard.</p>
+                )}
+
+                {taskDraft?.reference && (
+                  <div className="relative mt-2 inline-block">
+                    <img
+                      src={resolveImageSrc(taskDraft.reference)}
+                      alt="Task screenshot preview"
+                      className="max-h-40 rounded-md border border-border"
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 rounded-full bg-background/85 p-1 text-foreground shadow"
+                      onClick={() =>
+                        setTaskDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                reference: "",
+                              }
+                            : prev,
+                        )
+                      }
+                      aria-label="Remove screenshot"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+
+                <Button type="button" variant="outline" className="mt-3" onClick={() => screenshotInputRef.current?.click()}>
+                  <ImagePlus className="mr-2 h-4 w-4" /> Choose screenshot
+                </Button>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={closeTaskDetails}>Cancel</Button>
+                <Button onClick={saveTaskDetails}>Save</Button>
+              </div>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">Task not found.</p>

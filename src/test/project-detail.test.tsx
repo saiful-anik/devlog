@@ -23,6 +23,9 @@ vi.mock("@/hooks/useStoreSubscription", () => ({
 
 vi.mock("@/lib/store", () => ({
   getCachedProjects: () => projectsData,
+  resolveImageSrc: (value: string) => value,
+  getScreenshotSizeLimit: vi.fn(async () => 2 * 1024 * 1024),
+  formatBytes: (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)}MB`,
   store: {
     uid: () => "new-id",
     getProjects: (...args: any[]) => getProjectsMock(...args),
@@ -64,21 +67,68 @@ describe("ProjectDetail", () => {
     });
   });
 
-  it("updates task URL/filepath reference and saves project", async () => {
+  it("saves task edits only when Save is clicked", async () => {
     render(<ProjectDetail />);
 
     await screen.findByText("Project A");
 
     fireEvent.click(screen.getByText("Task 1"));
 
-    const referenceInput = await screen.findByPlaceholderText("URL or file path (optional)");
-    fireEvent.change(referenceInput, { target: { value: "https://example.com/task-file.png" } });
+    const detailsInput = await screen.findByPlaceholderText("Task details");
+    fireEvent.change(detailsInput, { target: { value: "updated details" } });
+
+    expect(saveProjectsMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+    await waitFor(() => {
+      expect(saveProjectsMock).not.toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByText("Task 1"));
+
+    const reopenedDetailsInput = await screen.findByPlaceholderText("Task details");
+    fireEvent.change(reopenedDetailsInput, { target: { value: "updated details" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(saveProjectsMock).toHaveBeenCalled();
     });
 
     const savedProjects = saveProjectsMock.mock.calls.at(-1)?.[0] as any[];
-    expect(savedProjects[0].tasks[0].reference).toBe("https://example.com/task-file.png");
+    expect(savedProjects[0].tasks[0].description).toBe("updated details");
+  });
+
+  it("supports Enter save and Escape discard in details field", async () => {
+    render(<ProjectDetail />);
+
+    await screen.findByText("Project A");
+
+    fireEvent.click(screen.getByText("Task 1"));
+
+    const detailsInput = await screen.findByPlaceholderText("Task details");
+    fireEvent.change(detailsInput, { target: { value: "line one" } });
+
+    fireEvent.keyDown(detailsInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(saveProjectsMock).toHaveBeenCalled();
+    });
+
+    const savedProjects = saveProjectsMock.mock.calls.at(-1)?.[0] as any[];
+    expect(savedProjects[0].tasks[0].description).toBe("line one");
+
+    saveProjectsMock.mockClear();
+
+    fireEvent.click(screen.getByText("Task 1"));
+
+    const detailsInputAgain = await screen.findByPlaceholderText("Task details");
+    fireEvent.change(detailsInputAgain, { target: { value: "discard me" } });
+    fireEvent.keyDown(detailsInputAgain, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(saveProjectsMock).not.toHaveBeenCalled();
+    });
   });
 });

@@ -131,7 +131,27 @@ export function getCachedTimeline(): TimelineEvent[] {
 }
 
 function setCachedProjects(projects: Project[]) {
-  cachedProjects = cloneProjects(projects);
+
+  const previousById = new Map(cachedProjects.map((project) => [project.id, project]));
+
+  const merged = projects.map((project) => {
+    const previous = previousById.get(project.id);
+    if (!previous) return project;
+
+    const nextUpdatedAt = Date.parse(project.updatedAt);
+    const prevUpdatedAt = Date.parse(previous.updatedAt);
+
+    if (!Number.isNaN(prevUpdatedAt) && (Number.isNaN(nextUpdatedAt) || prevUpdatedAt > nextUpdatedAt)) {
+      return {
+        ...project,
+        updatedAt: previous.updatedAt,
+      };
+    }
+
+    return project;
+  });
+
+  cachedProjects = cloneProjects(merged);
 }
 
 function setCachedNotes(notes: Note[]) {
@@ -200,8 +220,17 @@ function warnFallback(reason: string) {
 }
 
 async function stopRealtimeSync() {
-  if (realtimeChannel && supabase) {
-    await supabase.removeChannel(realtimeChannel);
+  const channel = realtimeChannel;
+
+  if (channel && supabase) {
+    try {
+      await supabase.removeChannel(channel);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("WebSocket is closed before the connection is established")) {
+        warnFallback(message);
+      }
+    }
   }
 
   realtimeChannel = null;
@@ -279,6 +308,10 @@ async function ensureRealtimeSync(userId: string) {
   }
 }
 
+export async function startStoreSync(userId: string) {
+  await ensureRealtimeSync(userId);
+}
+
 async function getUserId(): Promise<string | null> {
   if (!supabase) {
     warnFallback("missing Supabase environment configuration");
@@ -296,7 +329,6 @@ async function getUserId(): Promise<string | null> {
   }
 
   if (session?.user?.id) {
-    void ensureRealtimeSync(session.user.id);
     return session.user.id;
   }
 
@@ -456,8 +488,43 @@ async function saveProjectsRemote(
   // Delete removed projects.
   const { data: existingProjects } = await supabase
     .from("projects")
-    .select("id")
+    .select("id, title, description, created_at, updated_at")
     .eq("user_id", userId);
+
+  const existingProjectById = new Map(
+    (existingProjects ?? []).map(
+      (row: {
+        id: string;
+        title?: string | null;
+        description?: string | null;
+        created_at?: string | null;
+        updated_at?: string | null;
+      }) => [row.id, row],
+    ),
+  );
+
+  const existingUpdatedAtById = new Map(
+    (existingProjects ?? []).map((row: { id: string; updated_at?: string | null }) => [
+      row.id,
+      row.updated_at ?? null,
+    ]),
+  );
+
+  const syncedProjects: Project[] = normalizedProjects.map((project) => {
+    const existingUpdatedAt = existingUpdatedAtById.get(project.id);
+    const incomingMs = Date.parse(project.updatedAt);
+    const existingMs = existingUpdatedAt ? Date.parse(existingUpdatedAt) : NaN;
+
+    if (!Number.isNaN(existingMs) && (Number.isNaN(incomingMs) || existingMs > incomingMs)) {
+      return {
+        ...project,
+        updatedAt: existingUpdatedAt as string,
+      };
+    }
+
+    return project;
+  });
+
   const staleProjectIds = (existingProjects ?? [])
     .map((r) => r.id)
     .filter((id) => !newProjectIds.has(id));
@@ -468,52 +535,122 @@ async function saveProjectsRemote(
   // Delete removed tasks
   const { data: existingTasks } = await supabase
     .from("tasks")
-    .select("id")
+    .select("id, project_id, title, status, created_at, details, resource_path")
     .eq("user_id", userId);
+
+  const existingTaskById = new Map(
+    (existingTasks ?? []).map(
+      (row: {
+        id: string;
+        project_id: string;
+        title: string;
+        status: Task["status"];
+        created_at: string;
+        details?: string | null;
+        resource_path?: string | null;
+      }) => [row.id, row],
+    ),
+  );
+
   const staleTaskIds = (existingTasks ?? [])
     .map((r) => r.id)
     .filter((id) => !newTaskIds.has(id));
+
+  const changedProjectIds = new Set<string>();
+
+  for (const project of syncedProjects) {
+    const existingProject = existingProjectById.get(project.id);
+
+    if (!existingProject) {
+      changedProjectIds.add(project.id);
+      continue;
+    }
+
+    if (
+      existingProject.title !== project.name ||
+      (existingProject.description ?? "") !== (project.description ?? "") ||
+      existingProject.created_at !== project.createdAt ||
+      existingProject.updated_at !== project.updatedAt
+    ) {
+      changedProjectIds.add(project.id);
+    }
+  }
+
+  for (const staleTask of existingTasks ?? []) {
+    if (staleTaskIds.includes(staleTask.id)) {
+      changedProjectIds.add(staleTask.project_id);
+    }
+  }
+
+  const changedTaskRows = syncedProjects.flatMap((project) =>
+    project.tasks
+      .map((task) => ({
+        id: task.id,
+        user_id: userId,
+        project_id: project.id,
+        title: task.title,
+        status: task.status,
+        created_at: task.createdAt,
+        details: task.description ?? "",
+        resource_path: task.reference ?? null,
+      }))
+      .filter((taskRow) => {
+        const existingTask = existingTaskById.get(taskRow.id);
+        if (!existingTask) {
+          changedProjectIds.add(taskRow.project_id);
+          return true;
+        }
+
+        const hasChanged =
+          existingTask.project_id !== taskRow.project_id ||
+          existingTask.title !== taskRow.title ||
+          existingTask.status !== taskRow.status ||
+          existingTask.created_at !== taskRow.created_at ||
+          (existingTask.details ?? "") !== taskRow.details ||
+          (existingTask.resource_path ?? null) !== taskRow.resource_path;
+
+        if (hasChanged) {
+          changedProjectIds.add(taskRow.project_id);
+        }
+
+        return hasChanged;
+      }),
+  );
+
   if (staleTaskIds.length > 0) {
     await supabase.from("tasks").delete().in("id", staleTaskIds);
   }
 
   if (normalizedProjects.length === 0) return [];
 
-  // Upsert projects
-  const projectRows = normalizedProjects.map((project) => ({
-    id: project.id,
-    user_id: userId,
-    title: project.name,
-    description: project.description ?? "",
-    created_at: project.createdAt,
-    updated_at: new Date().toISOString(),
-  }));
-  const { error: projectError } = await supabase
-    .from("projects")
-    .upsert(projectRows, { onConflict: "id" });
-  if (projectError) throw projectError;
-
-  // Upsert tasks
-  const taskRows = normalizedProjects.flatMap((project) =>
-    project.tasks.map((task) => ({
-      id: task.id,
-      user_id: userId,
-      project_id: project.id,
-      title: task.title,
-      status: task.status,
-      created_at: task.createdAt,
-      details: task.description ?? "",
-      resource_path: task.reference ?? null,
-    })),
-  );
-  if (taskRows.length > 0) {
+  // Upsert changed tasks only.
+  if (changedTaskRows.length > 0) {
     const { error: taskError } = await supabase
       .from("tasks")
-      .upsert(taskRows, { onConflict: "id" });
+      .upsert(changedTaskRows, { onConflict: "id" });
     if (taskError) throw taskError;
   }
 
-  return normalizedProjects;
+  // Upsert changed projects only.
+  const projectRows = syncedProjects
+    .filter((project) => changedProjectIds.has(project.id))
+    .map((project) => ({
+      id: project.id,
+      user_id: userId,
+      title: project.name,
+      description: project.description ?? "",
+      created_at: project.createdAt,
+      updated_at: project.updatedAt,
+    }));
+
+  if (projectRows.length > 0) {
+    const { error: projectError } = await supabase
+      .from("projects")
+      .upsert(projectRows, { onConflict: "id" });
+    if (projectError) throw projectError;
+  }
+
+  return syncedProjects;
 }
 
 async function getNotesRemote(userId: string): Promise<Note[]> {
