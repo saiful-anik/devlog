@@ -56,6 +56,8 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
   const [screenshots, setScreenshots] = useState<ProjectScreenshot[]>([]);
+  const [activeSection, setActiveSection] = useState<"tasks" | "screenshots">("tasks");
+  const [selectedScreenshot, setSelectedScreenshot] = useState<ProjectScreenshot | null>(null);
   const [taskName, setTaskName] = useState("");
   const [taskOpen, setTaskOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -566,92 +568,126 @@ export default function ProjectDetail() {
         Created on {new Date(project.createdAt).toLocaleDateString()} - Last updated {new Date(project.updatedAt).toLocaleDateString()}
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {COLUMNS.map(col => {
-          const tasks = sortByOrder(project.tasks.filter((task) => task.status === col.key));
-          return (
-            <div key={col.key}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className={`w-2.5 h-2.5 rounded-full ${col.color}`} />
-                <span className="font-semibold text-sm">{col.label}</span>
-                <span className="text-muted-foreground text-sm">({tasks.length})</span>
-                {col.key === "backlog" && (
-                  <button onClick={() => setTaskOpen(true)} className="ml-auto text-muted-foreground hover:text-foreground"><Plus className="w-4 h-4" /></button>
-                )}
-              </div>
-              <div
-                className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => void moveTask(col.key)}
-              >
-                {tasks.length === 0 && <p className="text-xs text-muted-foreground text-center py-6">No tasks</p>}
-                {tasks.map(task => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => handleTaskDragStart(e, task)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      void moveTask(col.key, task.id);
-                    }}
-                    onDragEnd={() => {
-                      setDragTaskId(null);
-                      clearDragPreview();
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setDeleteTaskId(task.id);
-                    }}
-                    onClick={() => openTaskDetails(task.id)}
-                    className="bg-card border border-border rounded-lg p-3 text-left text-sm hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
-                  >
-                    <p>{task.title}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+      {/* Section Tabs */}
+      <div className="flex gap-2 mb-6 border-b border-border">
+        <button
+          onClick={() => setActiveSection("tasks")}
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeSection === "tasks"
+              ? "text-foreground border-b-2 border-primary -mb-[2px]"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Tasks
+        </button>
+        <button
+          onClick={() => setActiveSection("screenshots")}
+          className={`px-4 py-2 text-sm font-medium transition-colors ${
+            activeSection === "screenshots"
+              ? "text-foreground border-b-2 border-primary -mb-[2px]"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Screenshots ({screenshots.length})
+        </button>
       </div>
 
-      {/* Screenshots Section */}
-      <div className="mt-8">
-        <h2 className="text-xl font-bold mb-4">Project Screenshots</h2>
-        {screenshots.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No screenshots yet. Upload one to get started.</p>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {screenshots.map((screenshot) => (
-              <div key={screenshot.id} className="bg-card border border-border rounded-xl p-5">
-                <div className="mb-2 flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-xs font-medium text-white dark:text-rose-100">
-                    <Image className="h-3.5 w-3.5" />
-                    Screenshot
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(screenshot.created_at).toLocaleDateString([], {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
+      {/* Tasks Section */}
+      {activeSection === "tasks" && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {COLUMNS.map(col => {
+            const tasks = sortByOrder(project.tasks.filter((task) => task.status === col.key));
+            return (
+              <div key={col.key}>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className={`w-2.5 h-2.5 rounded-full ${col.color}`} />
+                  <span className="font-semibold text-sm">{col.label}</span>
+                  <span className="text-muted-foreground text-sm">({tasks.length})</span>
+                  {col.key === "backlog" && (
+                    <button onClick={() => setTaskOpen(true)} className="ml-auto text-muted-foreground hover:text-foreground"><Plus className="w-4 h-4" /></button>
+                  )}
                 </div>
-                {screenshot.caption && <p className="text-sm text-muted-foreground mb-3">{screenshot.caption}</p>}
-                <div className="relative inline-block">
+                <div
+                  className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => void moveTask(col.key)}
+                >
+                  {tasks.length === 0 && <p className="text-xs text-muted-foreground text-center py-6">No tasks</p>}
+                  {tasks.map(task => (
+                    <div
+                      key={task.id}
+                      draggable
+                      onDragStart={(e) => handleTaskDragStart(e, task)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        void moveTask(col.key, task.id);
+                      }}
+                      onDragEnd={() => {
+                        setDragTaskId(null);
+                        clearDragPreview();
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setDeleteTaskId(task.id);
+                      }}
+                      onClick={() => openTaskDetails(task.id)}
+                      className="bg-card border border-border rounded-lg p-3 text-left text-sm hover:border-primary/40 transition-colors cursor-grab active:cursor-grabbing"
+                    >
+                      <p>{task.title}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Screenshots Section */}
+      {activeSection === "screenshots" && (
+        <div>
+          {screenshots.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No screenshots yet. Upload one to get started.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {screenshots.map((screenshot) => (
+                <button
+                  key={screenshot.id}
+                  onClick={() => setSelectedScreenshot(screenshot)}
+                  className="group relative overflow-hidden rounded-lg cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 dark:focus:ring-offset-slate-950 aspect-square"
+                >
                   <img
                     src={resolveImageSrc(screenshot.file_path)}
                     alt={screenshot.caption || "Screenshot"}
-                    className="max-w-lg rounded-lg border border-border max-h-96 object-cover"
+                    className="w-full h-full object-cover group-hover:brightness-75 transition-all duration-200"
                   />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Fullscreen Preview Modal */}
+      {selectedScreenshot && (
+        <Dialog open={!!selectedScreenshot} onOpenChange={(open) => !open && setSelectedScreenshot(null)}>
+          <DialogContent className="max-w-4xl max-h-[90vh] p-0 bg-black/95 border-0">
+            <div className="relative w-full h-full flex items-center justify-center">
+              <img
+                src={resolveImageSrc(selectedScreenshot.file_path)}
+                alt={selectedScreenshot.caption || "Screenshot"}
+                className="max-w-full max-h-[85vh] object-cover"
+              />
+              {selectedScreenshot.caption && (
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 text-white text-sm">
+                  {selectedScreenshot.caption}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <Dialog open={taskDetailsOpen} onOpenChange={handleTaskDetailsOpenChange}>
         <DialogContent>
