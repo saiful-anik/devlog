@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Plus, Calendar, ImagePlus, X, FolderKanban, ListTodo, BookOpen, Sparkles, Image } from "lucide-react";
 import { store, TimelineEvent, getCachedTimeline, resolveImageSrc, getScreenshotSizeLimit, formatBytes, ProjectScreenshot } from "@/lib/store";
 import type { Task } from "@/lib/store";
@@ -12,6 +12,8 @@ import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 import { supabase } from "@/lib/supabase";
 
 export default function Timeline() {
+  const PAGE_SIZE = 10;
+
   const [events, setEvents] = useState<TimelineEvent[]>(getCachedTimeline());
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -21,6 +23,31 @@ export default function Timeline() {
   const [clipboardImage, setClipboardImage] = useState<string | null>(null);
   const [clipboardStatus, setClipboardStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loadMoreRef = useRef<(() => Promise<void>) | null>(null);
+
+  const setSentinel = useCallback((el: HTMLDivElement | null) => {
+    // Disconnect previous observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+
+    sentinelRef.current = el;
+    if (!el) return;
+
+    observerRef.current = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) void loadMoreRef.current?.();
+      }
+    }, { root: null, rootMargin: "200px", threshold: 0 });
+
+    observerRef.current.observe(el);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const readFileAsDataUrl = (file: File) =>
@@ -67,60 +94,163 @@ export default function Timeline() {
     }
   };
 
+  // Fetch a page by merging `timeline_events` and `project_screenshots` by timestamp.
+  const fetchPage = async (before?: string | null) => {
+    if (!supabase) return { items: [] as TimelineEvent[], nextCursor: null };
+
+    // Try to scope queries to the current user when possible
+    let userId: string | null = null;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      userId = sessionData?.session?.user?.id ?? null;
+    } catch {
+      userId = null;
+    }
+
+    const batch = PAGE_SIZE * 2;
+
+    // Build queries
+    const eventsQuery = supabase
+      .from("timeline_events")
+      .select("id, project_id, event_type, payload, occurred_at")
+      .order("occurred_at", { ascending: false })
+      .limit(batch);
+
+    const screenshotsQuery = supabase
+      .from("project_screenshots")
+      .select("id, user_id, project_id, file_path, caption, created_at, updated_at")
+      .order("created_at", { ascending: false })
+      .limit(batch);
+
+    if (userId) {
+      eventsQuery.eq("user_id", userId);
+      screenshotsQuery.eq("user_id", userId);
+    }
+
+    if (before) {
+      eventsQuery.lt("occurred_at", before);
+      screenshotsQuery.lt("created_at", before);
+    }
+
+    const [eventsRes, screenshotsRes] = await Promise.all([eventsQuery, screenshotsQuery]);
+
+    const timelineRows = (eventsRes.data ?? []) as any[];
+    const screenshotRows = (screenshotsRes.data ?? []) as any[];
+
+    // Map to TimelineEvent with unique ids (prefix screenshots to avoid id collisions)
+    const mappedEvents: TimelineEvent[] = timelineRows.map((row) => ({
+      id: row.id,
+      type: row.event_type,
+      title: row.payload?.title ?? row.event_type,
+      description: row.payload?.description ?? "",
+      image: row.payload?.image ?? undefined,
+      projectId: row.project_id ?? undefined,
+      projectName: row.payload?.projectName ?? undefined,
+      timestamp: row.occurred_at,
+    }));
+
+    // Need project names for screenshots
+    const projects = await store.getProjects();
+    const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
+
+    const mappedScreenshots: TimelineEvent[] = screenshotRows.map((s: any) => ({
+      id: `screenshot:${s.id}`,
+      type: "screenshot",
+      title: `${projectMap[s.project_id] || "Project"} - ${s.caption || "Screenshot"}`,
+      description: s.caption || "Project screenshot",
+      image: s.file_path,
+      projectId: s.project_id,
+      projectName: projectMap[s.project_id],
+      timestamp: s.created_at,
+    }));
+
+    // Merge and sort by timestamp desc
+    const combined = [...mappedEvents, ...mappedScreenshots]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // Deduplicate by id while keeping order
+    const seen = new Set<string>();
+    const unique: TimelineEvent[] = [];
+    for (const item of combined) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      unique.push(item);
+      if (unique.length >= PAGE_SIZE) break;
+    }
+
+    const nextCursor = unique.length > 0 ? unique[unique.length - 1].timestamp : null;
+    return { items: unique, nextCursor };
+  };
+
   useEffect(() => {
     let active = true;
 
-    const load = async () => {
+    const loadFirst = async () => {
+      setIsLoading(true);
       try {
-        const timeline = await store.getTimeline();
+        // First, use cached/combined timeline from the store as a fallback.
+        const cached = await store.getTimeline();
         if (!active) return;
+        // Show cached items initially so UI isn't empty for unauthenticated users.
+        setEvents(cached.slice(0, PAGE_SIZE));
+        setCursor(cached.length > 0 ? cached[Math.min(cached.length, PAGE_SIZE) - 1].timestamp : null);
+        setHasMore(cached.length >= PAGE_SIZE);
 
-        // Fetch project screenshots and add them as events
-        let allEvents = [...timeline];
-        if (supabase) {
+        // If Supabase session exists, fetch a server-side page to enable pagination.
+        if (supabase?.auth) {
           try {
-            const { data: screenshots } = await supabase
-              .from("project_screenshots")
-              .select("*")
-              .order("created_at", { ascending: false });
-
-            if (screenshots) {
-              // Get projects for screenshot names
-              const projects = await store.getProjects();
-              const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
-
-              const screenshotEvents: TimelineEvent[] = screenshots.map((screenshot) => ({
-                id: screenshot.id,
-                type: "screenshot" as const,
-                title: `${projectMap[screenshot.project_id] || "Project"} - ${screenshot.caption || "Screenshot"}`,
-                description: screenshot.caption || "Project screenshot",
-                image: screenshot.file_path,
-                projectId: screenshot.project_id,
-                projectName: projectMap[screenshot.project_id],
-                timestamp: screenshot.created_at,
-              }));
-
-              allEvents = [...allEvents, ...screenshotEvents].sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-              );
+            const { data: sessionData } = await supabase.auth.getSession();
+            const userId = sessionData?.session?.user?.id ?? null;
+            if (userId) {
+              const { items, nextCursor } = await fetchPage(null);
+              if (!active) return;
+              if (items.length > 0) {
+                setEvents(items);
+                setCursor(nextCursor);
+                setHasMore(items.length >= PAGE_SIZE);
+              }
             }
-          } catch (error) {
-            console.error("Failed to fetch screenshots:", error);
+          } catch (err) {
+            // ignore and keep cached results
+            console.error("pagination: failed to get session/fetch page", err);
           }
         }
-
-        setEvents(allEvents);
+      } catch (err) {
+        console.error(err);
       } finally {
         if (active) setIsLoading(false);
       }
     };
 
-    void load();
+    void loadFirst();
 
     return () => {
       active = false;
     };
   }, []);
+  const loadMore = async () => {
+    if (!hasMore || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const { items, nextCursor } = await fetchPage(cursor ?? null);
+      setEvents((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        const merged = [...prev];
+        for (const it of items) {
+          if (!seen.has(it.id)) merged.push(it);
+        }
+        return merged;
+      });
+      setCursor(nextCursor);
+      setHasMore(items.length >= PAGE_SIZE);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+  // Keep a ref to the latest loadMore so the observer callback always calls current implementation
+  loadMoreRef.current = loadMore;
 
   useStoreSubscription(["timeline"], () => {
     setEvents(getCachedTimeline());
@@ -403,6 +533,21 @@ export default function Timeline() {
           </div>
         </div>
       ))}
+      {/* Sentinel for infinite scroll */}
+      <div ref={setSentinel} className="h-8 flex items-center justify-center">{
+        isLoadingMore ? (
+          <div className="w-full max-w-md">
+            <Skeleton className="h-4 w-1/3 mb-2" />
+            <div className="flex flex-col gap-3">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <div key={i} className="bg-card border border-border rounded-xl p-3">
+                  <Skeleton className="h-3 w-24" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (!hasMore ? <p className="text-sm text-muted-foreground">No more events</p> : null)
+      }</div>
         </>
       )}
     </div>
