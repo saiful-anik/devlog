@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Plus, Pencil, ImagePlus, X } from "lucide-react";
-import { store, Project, Task, getCachedProjects, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
+import { ArrowLeft, Plus, Pencil, ImagePlus, X, Image } from "lucide-react";
+import { store, Project, Task, getCachedProjects, resolveImageSrc, getScreenshotSizeLimit, formatBytes, ProjectScreenshot } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +15,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
+import { ScreenshotUploadDialog } from "@/components/ScreenshotUploadDialog";
+import { supabase } from "@/lib/supabase";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,6 +55,7 @@ export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
+  const [screenshots, setScreenshots] = useState<ProjectScreenshot[]>([]);
   const [taskName, setTaskName] = useState("");
   const [taskOpen, setTaskOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -153,6 +156,24 @@ export default function ProjectDetail() {
 
       setProject(current);
       setEditName(current.name);
+
+      // Fetch project screenshots
+      if (supabase && id) {
+        try {
+          const { data } = await supabase
+            .from("project_screenshots")
+            .select("*")
+            .eq("project_id", id)
+            .order("created_at", { ascending: false });
+          
+          if (active && data) {
+            setScreenshots(data as ProjectScreenshot[]);
+          }
+        } catch (error) {
+          console.error("Failed to fetch screenshots:", error);
+        }
+      }
+
       setIsLoading(false);
     };
 
@@ -505,7 +526,26 @@ export default function ProjectDetail() {
 
       <div className="flex items-center gap-4 mb-1 flex-wrap">
         <h1 className="text-3xl font-bold">{project.name}</h1>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <ScreenshotUploadDialog 
+            projectId={project.id} 
+            projectName={project.name}
+            onUploadSuccess={async () => {
+              // Refresh screenshots after upload
+              if (supabase && id) {
+                const { data } = await supabase
+                  .from("project_screenshots")
+                  .select("*")
+                  .eq("project_id", id)
+                  .order("created_at", { ascending: false });
+                
+                if (data) {
+                  setScreenshots(data as ProjectScreenshot[]);
+                  toast.success("Screenshot uploaded successfully!");
+                }
+              }
+            }}
+          />
           <Dialog open={taskOpen} onOpenChange={setTaskOpen}>
             <DialogTrigger asChild><Button><Plus className="w-4 h-4 mr-1" /> Add Task</Button></DialogTrigger>
             <DialogContent>
@@ -573,6 +613,44 @@ export default function ProjectDetail() {
             </div>
           );
         })}
+      </div>
+
+      {/* Screenshots Section */}
+      <div className="mt-8">
+        <h2 className="text-xl font-bold mb-4">Project Screenshots</h2>
+        {screenshots.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No screenshots yet. Upload one to get started.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {screenshots.map((screenshot) => (
+              <div key={screenshot.id} className="bg-card border border-border rounded-xl p-5">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/20 px-2 py-1 text-xs font-medium text-white dark:text-rose-100">
+                    <Image className="h-3.5 w-3.5" />
+                    Screenshot
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(screenshot.created_at).toLocaleDateString([], {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </div>
+                {screenshot.caption && <p className="text-sm text-muted-foreground mb-3">{screenshot.caption}</p>}
+                <div className="relative inline-block">
+                  <img
+                    src={resolveImageSrc(screenshot.file_path)}
+                    alt={screenshot.caption || "Screenshot"}
+                    className="max-w-lg rounded-lg border border-border max-h-96 object-cover"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Dialog open={taskDetailsOpen} onOpenChange={handleTaskDetailsOpenChange}>

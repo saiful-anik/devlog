@@ -47,13 +47,23 @@ export interface Note {
 
 export interface TimelineEvent {
   id: string;
-  type: "project" | "task" | "log" | "custom";
+  type: "project" | "task" | "log" | "screenshot" | "custom";
   title: string;
   description: string;
   image?: string;
   projectId?: string;
   projectName?: string;
   timestamp: string;
+}
+
+export interface ProjectScreenshot {
+  id: string;
+  user_id: string;
+  project_id: string;
+  file_path: string;
+  caption?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export type StoreScope = "projects" | "notes" | "timeline";

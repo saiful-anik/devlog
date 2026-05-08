@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Calendar, ImagePlus, X, FolderKanban, ListTodo, BookOpen, Sparkles } from "lucide-react";
-import { store, TimelineEvent, getCachedTimeline, resolveImageSrc, getScreenshotSizeLimit, formatBytes } from "@/lib/store";
+import { Plus, Calendar, ImagePlus, X, FolderKanban, ListTodo, BookOpen, Sparkles, Image } from "lucide-react";
+import { store, TimelineEvent, getCachedTimeline, resolveImageSrc, getScreenshotSizeLimit, formatBytes, ProjectScreenshot } from "@/lib/store";
 import type { Task } from "@/lib/store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
+import { supabase } from "@/lib/supabase";
 
 export default function Timeline() {
   const [events, setEvents] = useState<TimelineEvent[]>(getCachedTimeline());
@@ -73,7 +74,42 @@ export default function Timeline() {
       try {
         const timeline = await store.getTimeline();
         if (!active) return;
-        setEvents(timeline);
+
+        // Fetch project screenshots and add them as events
+        let allEvents = [...timeline];
+        if (supabase) {
+          try {
+            const { data: screenshots } = await supabase
+              .from("project_screenshots")
+              .select("*")
+              .order("created_at", { ascending: false });
+
+            if (screenshots) {
+              // Get projects for screenshot names
+              const projects = await store.getProjects();
+              const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
+
+              const screenshotEvents: TimelineEvent[] = screenshots.map((screenshot) => ({
+                id: screenshot.id,
+                type: "screenshot" as const,
+                title: `${projectMap[screenshot.project_id] || "Project"} - ${screenshot.caption || "Screenshot"}`,
+                description: screenshot.caption || "Project screenshot",
+                image: screenshot.file_path,
+                projectId: screenshot.project_id,
+                projectName: projectMap[screenshot.project_id],
+                timestamp: screenshot.created_at,
+              }));
+
+              allEvents = [...allEvents, ...screenshotEvents].sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+              );
+            }
+          } catch (error) {
+            console.error("Failed to fetch screenshots:", error);
+          }
+        }
+
+        setEvents(allEvents);
       } finally {
         if (active) setIsLoading(false);
       }
@@ -151,6 +187,7 @@ export default function Timeline() {
     if (t === "project") return "Project";
     if (t === "task") return "Task";
     if (t === "log") return "Log";
+    if (t === "screenshot") return "Screenshot";
     return "Custom";
   };
 
@@ -172,6 +209,14 @@ export default function Timeline() {
         icon: FolderKanban,
         dot: "bg-emerald-500",
         badge: "bg-emerald-500/20 text-white dark:text-emerald-100 border-emerald-500/40",
+      };
+    }
+
+    if (type === "screenshot") {
+      return {
+        icon: Image,
+        dot: "bg-rose-500",
+        badge: "bg-rose-500/20 text-white dark:text-rose-100 border-rose-500/40",
       };
     }
 
