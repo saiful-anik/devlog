@@ -508,7 +508,7 @@ export default function ProjectDetail() {
   if (!project) return <div className="text-muted-foreground">Project not found.</div>;
 
   return (
-    <div>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between mb-2">
         <button onClick={() => navigate("/projects")} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Back to Dashboard</button>
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
@@ -594,11 +594,11 @@ export default function ProjectDetail() {
 
       {/* Tasks Section */}
       {activeSection === "tasks" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid flex-1 min-h-0 grid-cols-1 gap-4 overflow-hidden pb-4 md:grid-cols-3">
           {COLUMNS.map(col => {
             const tasks = sortByOrder(project.tasks.filter((task) => task.status === col.key));
             return (
-              <div key={col.key}>
+              <div key={col.key} className="flex min-h-0 flex-col">
                 <div className="flex items-center gap-2 mb-3">
                   <span className={`w-2.5 h-2.5 rounded-full ${col.color}`} />
                   <span className="font-semibold text-sm">{col.label}</span>
@@ -608,7 +608,7 @@ export default function ProjectDetail() {
                   )}
                 </div>
                 <div
-                  className="flex flex-col gap-2 min-h-[120px] bg-secondary/30 rounded-lg p-2"
+                  className="flex flex-1 min-h-0 flex-col gap-2 overflow-y-auto bg-secondary/30 rounded-lg p-2"
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => void moveTask(col.key)}
                 >

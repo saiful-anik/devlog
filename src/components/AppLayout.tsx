@@ -42,7 +42,7 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen overflow-hidden">
       <AppSidebar />
-      <main className="flex-1 overflow-y-auto p-8">
+      <main className="flex flex-1 min-h-0 flex-col overflow-hidden p-8">
         <div className="mb-6 flex justify-end">
           <div className="flex w-full max-w-2xl flex-wrap items-center justify-end gap-2 rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-sm backdrop-blur">
             <Badge variant="outline" className="flex items-center gap-2 border-border bg-transparent px-3 py-1 text-xs font-medium">
@@ -75,7 +75,9 @@ export default function AppLayout() {
             </Button>
           </div>
         </div>
-        <Outlet />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <Outlet />
+        </div>
       </main>
     </div>
   );
