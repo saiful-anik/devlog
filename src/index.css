@@ -56,6 +56,32 @@
 @layer base {
   * {
     @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--primary) / 0.75) hsl(var(--secondary));
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: hsl(var(--secondary));
+    border-radius: 9999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, hsl(var(--primary) / 0.85), hsl(var(--accent) / 0.7));
+    border-radius: 9999px;
+    border: 2px solid hsl(var(--secondary));
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: hsl(var(--secondary));
   }
 
   body {
