@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+
+onlyBuiltDependencies:
+  - "@swc/core"
+  - esbuild
+  - workerd
+allowBuilds:
+  '@swc/core': true
+  esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - miniflare@5.20260908.0-alpha
+  - wrangler@4.130.0
