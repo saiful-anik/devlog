@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "devlog-api",
+  "main": "src/index.ts",
+  "assets": { "directory": "../frontend/dist", "not_found_handling": "single-page-application" },
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "CORS_ORIGIN": "http://localhost:8080" },
+  "r2_buckets": [
+    { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "env": {
+    "staging": { "name": "devlog-api-staging", "vars": { "CORS_ORIGIN": "https://staging.example.com" } },
+    "production": { "name": "devlog-api-production", "vars": { "CORS_ORIGIN": "https://example.com" } }
+  }
+}
