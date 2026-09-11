@@ -7,13 +7,18 @@ import { notes, projectScreenshots, projects, tasks, timelineEvents } from "./db
 type Bindings = Env;
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use("/*", (c, next) => cors({ origin: c.env.CORS_ORIGIN, credentials: true })(c, next));
+app.use("/*", (c, next) => {
+  const requestedOrigin = c.req.header("Origin");
+  const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
+  const origin = requestedOrigin && allowedOrigins.includes(requestedOrigin) ? requestedOrigin : allowedOrigins[0];
+  return cors({ origin, credentials: true })(c, next);
+});
 
 type Session = { id: string; login: string; email: string | null; name: string | null };
 const encoder = new TextEncoder();
 const toBase64Url = (value: string) => btoa(value).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 const fromBase64Url = (value: string) => atob(value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "="));
-const cookie = (name: string, value: string, maxAge?: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Secure${maxAge ? `; Max-Age=${maxAge}` : ""}`;
+const cookie = (name: string, value: string, maxAge?: number, sameSite: "Lax" | "None" = "Lax") => `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Secure${maxAge ? `; Max-Age=${maxAge}` : ""}`;
 
 async function sign(value: string, secret: string) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -50,19 +55,26 @@ app.get("/auth/session", async (c) => {
 app.get("/auth/github", (c) => {
   if (!c.env.GITHUB_CLIENT_ID) return c.json({ status: "error", data: null, error: "GitHub OAuth is not configured" }, 503);
   const state = crypto.randomUUID();
-  const requestedNext = c.req.query("next");
-  const next = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/";
+  const requestedNext = c.req.query("next") || c.env.FRONTEND_URL;
+  const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
+  let next = c.env.FRONTEND_URL;
+  try { if (allowedOrigins.includes(new URL(requestedNext).origin)) next = requestedNext; } catch { /* use configured frontend URL */ }
   const callback = new URL("/auth/github/callback", c.req.url).toString();
   const url = new URL("https://github.com/login/oauth/authorize");
-  url.search = new URLSearchParams({ client_id: c.env.GITHUB_CLIENT_ID, redirect_uri: callback, scope: "read:user user:email", state: `${state}:${next}` }).toString();
+  url.search = new URLSearchParams({ client_id: c.env.GITHUB_CLIENT_ID, redirect_uri: callback, scope: "read:user user:email", state: `${state}.${toBase64Url(next)}` }).toString();
   c.header("Set-Cookie", cookie("devlog_oauth_state", state, 600));
   return c.redirect(url.toString());
 });
 
 app.get("/auth/github/callback", async (c) => {
   const state = c.req.query("state") || "";
-  const [nonce, requestedNext = "/"] = state.split(":", 2);
-  const next = requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/";
+  const [nonce, encodedNext] = state.split(".", 2);
+  let next = c.env.FRONTEND_URL;
+  try {
+    const requestedNext = fromBase64Url(encodedNext || "");
+    const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
+    if (allowedOrigins.includes(new URL(requestedNext).origin)) next = requestedNext;
+  } catch { /* use configured frontend URL */ }
   const stateCookie = c.req.header("Cookie")?.match(/(?:^|; )devlog_oauth_state=([^;]+)/)?.[1];
   if (!nonce || nonce !== stateCookie) return c.text("Invalid GitHub sign-in state.", 400);
   const code = c.req.query("code");
@@ -79,8 +91,8 @@ app.get("/auth/github/callback", async (c) => {
   const email = profile.email || emails.find((item) => item.primary && item.verified)?.email || emails.find((item) => item.verified)?.email || null;
   const session = { id: String(profile.id), login: profile.login, email, name: profile.name };
   if (!isAllowed(session, c.env.ALLOWED_USERS)) return c.text("You do not have permission to use this app.", 403);
-  c.header("Set-Cookie", `${cookie("devlog_session", await createSession(session, c.env.SESSION_SECRET), 604800)}, ${cookie("devlog_oauth_state", "", 0)}`);
-  return c.redirect(new URL(next, c.req.url).toString());
+  c.header("Set-Cookie", `${cookie("devlog_session", await createSession(session, c.env.SESSION_SECRET), 604800, "None")}, ${cookie("devlog_oauth_state", "", 0)}`);
+  return c.redirect(next);
 });
 
 app.post("/auth/logout", (c) => { c.header("Set-Cookie", cookie("devlog_session", "", 0)); return c.json({ status: "ok", data: null, error: null }); });

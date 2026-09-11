@@ -7,7 +7,7 @@ export interface AuthSession {
 }
 
 export async function getSession(): Promise<AuthSession | null> {
-  const response = await fetch("/auth/session", { credentials: "include" });
+  const response = await fetch(apiUrl("/auth/session"), { credentials: "include" });
   if (!response.ok) return null;
   const result = await response.json();
   if (!result.data) return null;
@@ -17,9 +17,11 @@ export async function getSession(): Promise<AuthSession | null> {
 export async function isAuthenticated() { return Boolean(await getSession()); }
 
 export async function signInWithGitHub(redirectPath = "/") {
-  window.location.assign(`/auth/github?next=${encodeURIComponent(redirectPath)}`);
+  const next = new URL(redirectPath, window.location.origin).toString();
+  window.location.assign(apiUrl(`/auth/github?next=${encodeURIComponent(next)}`));
 }
 
 export async function logout() {
-  await fetch("/auth/logout", { method: "POST", credentials: "include" });
+  await fetch(apiUrl("/auth/logout"), { method: "POST", credentials: "include" });
 }
+import { apiUrl } from "@/lib/api";
