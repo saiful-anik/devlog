@@ -1,6 +1,6 @@
 {
   "name": "devlog-api", "private": true, "version": "0.0.0", "type": "module",
   "scripts": { "dev": "wrangler dev", "build": "wrangler deploy --dry-run", "deploy": "wrangler deploy", "typecheck": "tsc --noEmit", "db:generate": "drizzle-kit generate", "db:migrate": "drizzle-kit migrate" },
-  "dependencies": { "@neondatabase/serverless": "^1.1.0", "drizzle-orm": "^0.44.7", "hono": "^4.13.7" },
+  "dependencies": { "@neondatabase/serverless": "^1.1.0", "drizzle-orm": "^0.44.7", "hono": "^4.13.7", "jose": "^6.1.0" },
   "devDependencies": { "@types/node": "^22.16.5", "drizzle-kit": "^0.31.5", "typescript": "^5.8.3", "wrangler": "^4.130.0" }
 }

@@ -17,7 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
 import { ScreenshotUploadDialog } from "@/components/ScreenshotUploadDialog";
 import { getSession } from "@/lib/auth";
-import { apiUrl } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -165,7 +165,7 @@ export default function ProjectDetail() {
         try {
           const user = await getSession();
           if (!user) return;
-          const response = await fetch(apiUrl(`/api/screenshots?userId=${encodeURIComponent(user.id)}&projectId=${encodeURIComponent(id)}`), { credentials: "include" });
+          const response = await apiFetch(`/api/screenshots?userId=${encodeURIComponent(user.id)}&projectId=${encodeURIComponent(id)}`);
           const result = await response.json();
           const data = result.data;
           
@@ -538,7 +538,7 @@ export default function ProjectDetail() {
               if (!id) return;
               const user = await getSession();
               if (!user) return;
-              const response = await fetch(apiUrl(`/api/screenshots?userId=${encodeURIComponent(user.id)}&projectId=${encodeURIComponent(id)}`), { credentials: "include" });
+              const response = await apiFetch(`/api/screenshots?userId=${encodeURIComponent(user.id)}&projectId=${encodeURIComponent(id)}`);
               const result = await response.json();
               if (result.data) setScreenshots(result.data as ProjectScreenshot[]);
             }}

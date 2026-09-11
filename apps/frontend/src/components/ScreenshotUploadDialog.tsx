@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { getSession } from "@/lib/auth";
-import { apiUrl } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { formatBytes, getScreenshotSizeLimit } from "@/lib/store";
 
 interface ScreenshotUploadDialogProps {
@@ -127,7 +127,7 @@ export function ScreenshotUploadDialog({
       form.set("projectId", projectId);
       form.set("caption", caption);
       form.set("file", new File([blob], "screenshot.png", { type: blob.type || "image/png" }));
-      const response = await fetch(apiUrl("/api/screenshots"), { method: "POST", credentials: "include", body: form });
+      const response = await apiFetch("/api/screenshots", { method: "POST", body: form });
       const result = await response.json();
       if (!response.ok || result.status !== "ok") throw new Error(result.error || "Upload failed");
       if (result.data) {
