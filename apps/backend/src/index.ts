@@ -44,18 +44,26 @@ function allowSession(session: Session, neonUser?: NeonSessionResponse["user"]) 
 async function readSession(request: Request, env: Env): Promise<Session | null> {
   let token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9._-]{20,8192})$/)?.[1];
   if (!token) {
-    const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
-    if (!response.ok) return null;
-    const result = await response.json() as NeonSessionResponse;
-    console.log("Neon Auth session", JSON.stringify({
-      hasToken: Boolean(result.session?.token),
-      jwtSubject: result.session?.token ? "present" : "missing",
-      user: result.user ? { id: result.user.id, email: result.user.email, role: result.user.role, name: result.user.name } : null,
-    }));
-    if (!result.session?.token) return null;
-    const session = await sessionFromToken(result.session.token, env);
-    console.log("Neon Auth authorization", JSON.stringify({ tokenSubject: session?.id ?? null, userId: result.user?.id ?? null, role: result.user?.role ?? null, allowed: Boolean(session && allowSession({ ...session }, result.user)) }));
-    return session ? allowSession(session, result.user) : null;
+    try {
+      const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
+      if (!response.ok) {
+        console.log("Neon Auth session unavailable", JSON.stringify({ status: response.status }));
+        return null;
+      }
+      const result = await response.json() as NeonSessionResponse;
+      console.log("Neon Auth session", JSON.stringify({
+        hasToken: Boolean(result.session?.token),
+        jwtSubject: result.session?.token ? "present" : "missing",
+        user: result.user ? { id: result.user.id, email: result.user.email, role: result.user.role, name: result.user.name } : null,
+      }));
+      if (!result.session?.token) return null;
+      const session = await sessionFromToken(result.session.token, env);
+      console.log("Neon Auth authorization", JSON.stringify({ tokenSubject: session?.id ?? null, userId: result.user?.id ?? null, role: result.user?.role ?? null, allowed: Boolean(session && allowSession({ ...session }, result.user)) }));
+      return session ? allowSession(session, result.user) : null;
+    } catch (error) {
+      console.log("Neon Auth session error", error instanceof Error ? error.message : "unknown error");
+      return null;
+    }
   }
   const session = await sessionFromToken(token, env);
   return null;
