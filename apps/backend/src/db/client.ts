@@ -10,6 +10,7 @@ export type Env = {
   GITHUB_CLIENT_SECRET: string;
   SESSION_SECRET: string;
   ALLOWED_USERS: string;
+  FRONTEND_URL: string;
 };
 
 export function createDb(env: Env) {

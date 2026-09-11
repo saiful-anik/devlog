@@ -2,10 +2,12 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "devlog-api",
   "main": "src/index.ts",
-  "assets": { "directory": "../frontend/dist", "not_found_handling": "single-page-application" },
   "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "CORS_ORIGIN": "http://localhost:8080" },
+  "vars": {
+    "CORS_ORIGIN": "http://localhost:8080,https://devlog-b09.pages.dev,https://devlog.bysaiful.site",
+    "FRONTEND_URL": "https://devlog.bysaiful.site"
+  },
   "r2_buckets": [
     { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
   ],

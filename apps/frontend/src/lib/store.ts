@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { apiUrl } from "@/lib/api";
 
 export interface Task { id: string; title: string; status: "backlog" | "in-progress" | "completed"; createdAt: string; description?: string; reference?: string; order?: number; }
 export interface Project { id: string; name: string; description?: string; tasks: Task[]; createdAt: string; updatedAt: string; }
@@ -14,7 +15,7 @@ let cachedProjects: Project[] = [];
 let cachedNotes: Note[] = [];
 let cachedTimeline: TimelineEvent[] = [];
 
-const api = (path: string, init?: RequestInit) => fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
+const api = (path: string, init?: RequestInit) => fetch(apiUrl(path), { ...init, credentials: "include", headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
 const notify = (scope: StoreScope) => listeners.forEach((listener) => listener(scope));
 const setStatus = (next: typeof status) => { status = next; syncListeners.forEach((listener) => listener(next)); };
 
