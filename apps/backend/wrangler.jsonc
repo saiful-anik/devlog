@@ -4,13 +4,16 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
   "vars": {
     "CORS_ORIGIN": "http://localhost:8080,https://devlog-b09.pages.dev,https://devlog.bysaiful.site",
-    "NEON_AUTH_URL": "https://ep-rough-bonus-b3sdrsbi.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth",
-    "NEON_AUTH_JWKS_URL": "https://ep-rough-bonus-b3sdrsbi.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
+    "NEON_AUTH_URL": "https://ep-rough-bonus-b3sdrsbi.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth"
   },
   "r2_buckets": [
     { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
+  ],
+  "routes": [
+    { "pattern": "api.devlog.bysaiful.site", "custom_domain": true }
   ],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "env": {

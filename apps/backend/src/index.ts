@@ -1,8 +1,7 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { createRemoteJWKSet, jwtVerify } from "jose";
-import { createDb, type Env } from "./db/client";
+import { createDb, createSql, type Env } from "./db/client";
 import { notes, projectScreenshots, projects, tasks, timelineEvents } from "./db/schema";
 
 type Bindings = Env;
@@ -17,56 +16,23 @@ app.use("/*", (c, next) => {
 
 type Session = { id: string; login: string; email: string | null; name: string | null };
 type NeonSessionResponse = { session?: { token?: string }; user?: { id?: string; name?: string; email?: string; role?: string; createdAt?: string } };
+type NeonAuthResponse = NeonSessionResponse & { data?: NeonSessionResponse };
 
-async function sessionFromToken(token: string, env: Env): Promise<Session | null> {
-  if (!/^[A-Za-z0-9._-]{20,8192}$/.test(token)) return null;
-  try {
-    const jwks = createRemoteJWKSet(new URL(env.NEON_AUTH_JWKS_URL));
-    const { payload } = await jwtVerify(token, jwks, { algorithms: ["EdDSA"] });
-    if (typeof payload.sub !== "string" || !payload.sub) return null;
-    const session = {
-      id: payload.sub,
-      login: typeof payload.preferred_username === "string" ? payload.preferred_username : typeof payload.email === "string" ? payload.email : payload.sub,
-      email: typeof payload.email === "string" ? payload.email : null,
-      name: typeof payload.name === "string" ? payload.name : null,
-    };
-    return session;
-  } catch { return null; }
+function sessionData(response: NeonAuthResponse): NeonSessionResponse {
+  return response.data ?? response;
 }
 
-function allowSession(session: Session, neonUser?: NeonSessionResponse["user"]) {
-  if (neonUser?.role !== "admin") return null;
-  if (typeof neonUser.email === "string") session.email = neonUser.email;
-  if (typeof neonUser.name === "string") session.name = neonUser.name;
-  return session;
+function allowSession(neonUser?: NeonSessionResponse["user"]): Session | null {
+  if (!neonUser?.id || neonUser.role !== "admin") return null;
+  return { id: neonUser.id, login: neonUser.email || neonUser.id, email: neonUser.email || null, name: neonUser.name || null };
 }
 
 async function readSession(request: Request, env: Env): Promise<Session | null> {
-  let token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9._-]{20,8192})$/)?.[1];
-  if (!token) {
-    try {
-      const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
-      if (!response.ok) {
-        console.log("Neon Auth session unavailable", JSON.stringify({ status: response.status }));
-        return null;
-      }
-      const result = await response.json() as NeonSessionResponse;
-      console.log("Neon Auth session", JSON.stringify({
-        hasToken: Boolean(result.session?.token),
-        jwtSubject: result.session?.token ? "present" : "missing",
-        user: result.user ? { id: result.user.id, email: result.user.email, role: result.user.role, name: result.user.name } : null,
-      }));
-      if (!result.session?.token) return null;
-      const session = await sessionFromToken(result.session.token, env);
-      console.log("Neon Auth authorization", JSON.stringify({ tokenSubject: session?.id ?? null, userId: result.user?.id ?? null, role: result.user?.role ?? null, allowed: Boolean(session && allowSession({ ...session }, result.user)) }));
-      return session ? allowSession(session, result.user) : null;
-    } catch (error) {
-      console.log("Neon Auth session error", error instanceof Error ? error.message : "unknown error");
-      return null;
-    }
-  }
-  const session = await sessionFromToken(token, env);
-  return null;
+  try {
+    const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
+    if (!response.ok) return null;
+    return allowSession(sessionData(await response.json() as NeonAuthResponse).user);
+  } catch { return null; }
 }
 
 function allowedOrigins(env: Env) {
@@ -131,9 +97,8 @@ app.get("/auth/callback", async (c) => {
   const sessionPath = `/get-session?neon_auth_session_verifier=${encodeURIComponent(verifier)}`;
   try {
     const response = await neonAuthFetch(c.env, sessionPath, c.req.header("Cookie"));
-    const result = response.ok ? await response.clone().json() as NeonSessionResponse : null;
-    const verifiedSession = result?.session?.token ? await sessionFromToken(result.session.token, c.env) : null;
-    const session = verifiedSession ? allowSession(verifiedSession, result?.user) : null;
+    const result = response.ok ? sessionData(await response.clone().json() as NeonAuthResponse) : null;
+    const session = allowSession(result?.user);
     const destination = new URL(returnTo);
     if (!response.ok) destination.searchParams.set("authError", "login-failed");
     else if (!session) {
@@ -183,7 +148,6 @@ app.put("/api/state", async (c) => {
     const userId = requireUserId(body.userId);
     const session = await readSession(c.req.raw, c.env);
     if (!session || session.id !== userId) return c.json({ status: "error", data: null, error: "Unauthorized" }, 401);
-    const db = createDb(c.env);
     const nextProjects = Array.isArray(body.projects) ? body.projects : [];
     const nextNotes = Array.isArray(body.notes) ? body.notes : [];
     const nextTimeline = Array.isArray(body.timeline) ? body.timeline : [];
@@ -191,17 +155,29 @@ app.put("/api/state", async (c) => {
       (Array.isArray(project.tasks) ? project.tasks : []).map((task) => ({ ...(task as Record<string, unknown>), projectId: project.id })),
     );
 
-    await db.transaction(async (tx) => {
-      await tx.delete(tasks).where(eq(tasks.userId, userId));
-      await tx.delete(timelineEvents).where(eq(timelineEvents.userId, userId));
-      await tx.delete(notes).where(eq(notes.userId, userId));
-      await tx.delete(projects).where(eq(projects.userId, userId));
-
-      if (nextProjects.length) await tx.insert(projects).values(nextProjects.map((project: Record<string, unknown>) => ({ id: project.id as string, userId, title: project.name as string, description: (project.description as string) || null, createdAt: new Date(project.createdAt as string), updatedAt: new Date(project.updatedAt as string) })));
-      if (nextTasks.length) await tx.insert(tasks).values(nextTasks.map((task: Record<string, unknown>) => ({ id: task.id as string, userId, projectId: task.projectId as string, title: task.title as string, status: task.status as string, details: (task.description as string) || null, resourcePath: (task.reference as string) || null, createdAt: new Date(task.createdAt as string) })));
-      if (nextNotes.length) await tx.insert(notes).values(nextNotes.map((note: Record<string, unknown>) => ({ id: note.id as string, userId, title: (note.title as string) || null, content: note.content as string, createdAt: new Date(note.createdAt as string), updatedAt: new Date(note.updatedAt as string) })));
-      if (nextTimeline.length) await tx.insert(timelineEvents).values(nextTimeline.map((event: Record<string, unknown>) => ({ id: event.id as string, userId, projectId: (event.projectId as string) || null, eventType: event.type as string, payload: { title: event.title, description: event.description, image: event.image, projectName: event.projectName }, occurredAt: new Date(event.timestamp as string) })));
-    });
+    // Neon HTTP supports a single atomic batch, not Drizzle's interactive transaction API.
+    await createSql(c.env).transaction((tx) => [
+      tx`delete from tasks where user_id = ${userId}`,
+      tx`delete from timeline_events where user_id = ${userId}`,
+      tx`delete from notes where user_id = ${userId}`,
+      tx`delete from projects where user_id = ${userId}`,
+      ...nextProjects.map((project: Record<string, unknown>) => tx`
+        insert into projects (id, user_id, title, description, created_at, updated_at)
+        values (${project.id as string}, ${userId}, ${project.name as string}, ${(project.description as string) || null}, ${new Date(project.createdAt as string).toISOString()}, ${new Date(project.updatedAt as string).toISOString()})
+      `),
+      ...nextTasks.map((task: Record<string, unknown>) => tx`
+        insert into tasks (id, user_id, project_id, title, status, details, resource_path, created_at)
+        values (${task.id as string}, ${userId}, ${task.projectId as string}, ${task.title as string}, ${task.status as string}, ${(task.description as string) || null}, ${(task.reference as string) || null}, ${new Date(task.createdAt as string).toISOString()})
+      `),
+      ...nextNotes.map((note: Record<string, unknown>) => tx`
+        insert into notes (id, user_id, title, content, created_at, updated_at)
+        values (${note.id as string}, ${userId}, ${(note.title as string) || null}, ${note.content as string}, ${new Date(note.createdAt as string).toISOString()}, ${new Date(note.updatedAt as string).toISOString()})
+      `),
+      ...nextTimeline.map((event: Record<string, unknown>) => tx`
+        insert into timeline_events (id, user_id, project_id, event_type, payload, occurred_at)
+        values (${event.id as string}, ${userId}, ${(event.projectId as string) || null}, ${event.type as string}, ${JSON.stringify({ title: event.title, description: event.description, image: event.image, projectName: event.projectName })}::jsonb, ${new Date(event.timestamp as string).toISOString()})
+      `),
+    ]);
     return c.json({ status: "ok", data: null, error: null });
   } catch (error) {
     return c.json({ status: "error", data: null, error: error instanceof Error ? error.message : "Unable to save data" }, 400);
