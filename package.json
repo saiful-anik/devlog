@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --parallel --filter devlog-api --filter devlog-web dev",
     "build": "pnpm --filter devlog-web build && pnpm --filter devlog-api build",
+    "build:frontend": "pnpm --filter devlog-web build",
     "lint": "pnpm --filter devlog-web lint",
     "test": "pnpm --filter devlog-web test",
     "typecheck": "pnpm --filter devlog-web typecheck && pnpm --filter devlog-api typecheck",
