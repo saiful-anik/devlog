@@ -20,6 +20,12 @@ export default function Login() {
   const nextPath = new URLSearchParams(location.search).get("next") || "/";
 
   useEffect(() => {
+    const authError = new URLSearchParams(location.search).get("authError");
+    if (authError === "not-authorized") setErrorMessage("You do not have permission to use this app.");
+    if (authError === "login-failed") setErrorMessage("GitHub login could not be completed. Please try again.");
+  }, [location.search]);
+
+  useEffect(() => {
     let active = true;
 
     void isAuthenticated().then((authed) => {

@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { createDb, type Env } from "./db/client";
 import { notes, projectScreenshots, projects, tasks, timelineEvents } from "./db/schema";
 
@@ -15,87 +16,63 @@ app.use("/*", (c, next) => {
 });
 
 type Session = { id: string; login: string; email: string | null; name: string | null };
-const encoder = new TextEncoder();
-const toBase64Url = (value: string) => btoa(value).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-const fromBase64Url = (value: string) => atob(value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "="));
-const cookie = (name: string, value: string, maxAge?: number, sameSite: "Lax" | "None" = "Lax") => `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Secure${maxAge ? `; Max-Age=${maxAge}` : ""}`;
-
-async function sign(value: string, secret: string) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const bytes = await crypto.subtle.sign("HMAC", key, encoder.encode(value));
-  return toBase64Url(String.fromCharCode(...new Uint8Array(bytes)));
-}
-
-async function createSession(session: Session, secret: string) {
-  const payload = toBase64Url(JSON.stringify({ ...session, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }));
-  return `${payload}.${await sign(payload, secret)}`;
-}
-
-async function readSession(request: Request, secret: string): Promise<Session | null> {
-  const token = request.headers.get("Cookie")?.match(/(?:^|; )devlog_session=([^;]+)/)?.[1];
-  if (!token) return null;
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature || signature !== await sign(payload, secret)) return null;
-  try {
-    const session = JSON.parse(fromBase64Url(payload));
-    return session.exp > Date.now() ? session : null;
-  } catch { return null; }
-}
+type NeonSessionResponse = { session?: { token?: string }; user?: { id?: string; name?: string; email?: string; createdAt?: string } };
 
 function isAllowed(session: Session, allowedUsers: string) {
   const allowed = allowedUsers.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
-  return allowed.includes(session.login.toLowerCase()) || Boolean(session.email && allowed.includes(session.email.toLowerCase()));
+  return allowed.length > 0 && (allowed.includes(session.login.toLowerCase()) || Boolean(session.email && allowed.includes(session.email.toLowerCase())));
 }
 
-app.get("/auth/session", async (c) => {
-  const session = await readSession(c.req.raw, c.env.SESSION_SECRET);
-  return c.json({ status: "ok", data: session, error: null });
-});
-
-app.get("/auth/github", (c) => {
-  if (!c.env.GITHUB_CLIENT_ID) return c.json({ status: "error", data: null, error: "GitHub OAuth is not configured" }, 503);
-  const state = crypto.randomUUID();
-  const requestedNext = c.req.query("next") || c.env.FRONTEND_URL;
-  const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
-  let next = c.env.FRONTEND_URL;
-  try { if (allowedOrigins.includes(new URL(requestedNext).origin)) next = requestedNext; } catch { /* use configured frontend URL */ }
-  const callback = new URL("/auth/github/callback", c.req.url).toString();
-  const url = new URL("https://github.com/login/oauth/authorize");
-  url.search = new URLSearchParams({ client_id: c.env.GITHUB_CLIENT_ID, redirect_uri: callback, scope: "read:user user:email", state: `${state}.${toBase64Url(next)}` }).toString();
-  c.header("Set-Cookie", cookie("devlog_oauth_state", state, 600));
-  return c.redirect(url.toString());
-});
-
-app.get("/auth/github/callback", async (c) => {
-  const state = c.req.query("state") || "";
-  const [nonce, encodedNext] = state.split(".", 2);
-  let next = c.env.FRONTEND_URL;
+async function sessionFromToken(token: string, env: Env): Promise<Session | null> {
+  if (!/^[A-Za-z0-9._-]{20,8192}$/.test(token)) return null;
   try {
-    const requestedNext = fromBase64Url(encodedNext || "");
-    const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
-    if (allowedOrigins.includes(new URL(requestedNext).origin)) next = requestedNext;
-  } catch { /* use configured frontend URL */ }
-  const stateCookie = c.req.header("Cookie")?.match(/(?:^|; )devlog_oauth_state=([^;]+)/)?.[1];
-  if (!nonce || nonce !== stateCookie) return c.text("Invalid GitHub sign-in state.", 400);
-  const code = c.req.query("code");
-  if (!code) return c.text("GitHub did not return an authorization code.", 400);
-  const callback = new URL("/auth/github/callback", c.req.url).toString();
-  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify({ client_id: c.env.GITHUB_CLIENT_ID, client_secret: c.env.GITHUB_CLIENT_SECRET, code, redirect_uri: callback }) });
-  const token = await tokenResponse.json<{ access_token?: string }>();
-  if (!token.access_token) return c.text("GitHub authorization failed.", 401);
-  const headers = { Authorization: `Bearer ${token.access_token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
-  const [profileResponse, emailsResponse] = await Promise.all([fetch("https://api.github.com/user", { headers }), fetch("https://api.github.com/user/emails", { headers })]);
-  if (!profileResponse.ok) return c.text("Unable to load your GitHub profile.", 401);
-  const profile = await profileResponse.json<{ id: number; login: string; name: string | null; email: string | null }>();
-  const emails = emailsResponse.ok ? await emailsResponse.json<Array<{ email: string; primary: boolean; verified: boolean }>>() : [];
-  const email = profile.email || emails.find((item) => item.primary && item.verified)?.email || emails.find((item) => item.verified)?.email || null;
-  const session = { id: String(profile.id), login: profile.login, email, name: profile.name };
-  if (!isAllowed(session, c.env.ALLOWED_USERS)) return c.text("You do not have permission to use this app.", 403);
-  c.header("Set-Cookie", `${cookie("devlog_session", await createSession(session, c.env.SESSION_SECRET), 604800, "None")}, ${cookie("devlog_oauth_state", "", 0)}`);
-  return c.redirect(next);
-});
+    const jwks = createRemoteJWKSet(new URL(env.NEON_AUTH_JWKS_URL));
+    const { payload } = await jwtVerify(token, jwks, { algorithms: ["EdDSA"] });
+    if (typeof payload.sub !== "string" || !payload.sub) return null;
+    const session = {
+      id: payload.sub,
+      login: typeof payload.preferred_username === "string" ? payload.preferred_username : typeof payload.email === "string" ? payload.email : payload.sub,
+      email: typeof payload.email === "string" ? payload.email : null,
+      name: typeof payload.name === "string" ? payload.name : null,
+    };
+    return isAllowed(session, env.ALLOWED_USERS) ? session : null;
+  } catch { return null; }
+}
 
-app.post("/auth/logout", (c) => { c.header("Set-Cookie", cookie("devlog_session", "", 0)); return c.json({ status: "ok", data: null, error: null }); });
+async function readSession(request: Request, env: Env): Promise<Session | null> {
+  let token = request.headers.get("Authorization")?.match(/^Bearer ([A-Za-z0-9._-]{20,8192})$/)?.[1];
+  if (!token) {
+    const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
+    if (!response.ok) return null;
+    const result = await response.json() as NeonSessionResponse;
+    token = result.session?.token;
+  }
+  if (!token) return null;
+  return sessionFromToken(token, env);
+}
+
+function allowedOrigins(env: Env) {
+  return env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+}
+
+function safeReturnTo(value: string | null | undefined, env: Env) {
+  const fallback = allowedOrigins(env)[0] || "http://localhost:8080";
+  try {
+    const url = new URL(value || fallback);
+    return allowedOrigins(env).includes(url.origin) ? url.toString() : fallback;
+  } catch { return fallback; }
+}
+
+async function neonAuthFetch(env: Env, path: string, cookie?: string | null | undefined, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (cookie) headers.set("Cookie", cookie);
+  return fetch(`${env.NEON_AUTH_URL.replace(/\/$/, "")}/${path.replace(/^\//, "")}`, { ...init, headers });
+}
+
+function copyAuthCookies(source: Response, target: Headers) {
+  const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : [];
+  for (const cookie of cookies) target.append("Set-Cookie", cookie);
+}
 
 const requireUserId = (value: string | undefined) => {
   if (!value || value.length > 128) throw new Error("A valid user id is required");
@@ -111,10 +88,62 @@ app.get("/health", async (c) => {
   }
 });
 
+app.get("/auth/github", async (c) => {
+  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env);
+  const callbackUrl = new URL("/auth/callback", c.req.url);
+  callbackUrl.searchParams.set("returnTo", returnTo);
+  try {
+    const response = await neonAuthFetch(c.env, "/sign-in/social", c.req.header("Cookie"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: new URL(returnTo).origin },
+      body: JSON.stringify({ provider: "github", callbackURL: callbackUrl.toString(), disableRedirect: true }),
+    });
+    const body = await response.json() as { url?: string };
+    if (!response.ok || !body.url || !body.url.startsWith("https://")) return c.json({ status: "error", data: null, error: "GitHub login is unavailable" }, 503);
+    const headers = new Headers({ Location: body.url });
+    copyAuthCookies(response, headers);
+    return new Response(null, { status: 302, headers });
+  } catch { return c.json({ status: "error", data: null, error: "GitHub login is unavailable" }, 503); }
+});
+
+app.get("/auth/callback", async (c) => {
+  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env);
+  const verifier = c.req.query("neon_auth_session_verifier");
+  if (!verifier || verifier.length > 4096) return c.redirect(`${returnTo}?authError=login-failed`, 302);
+  const sessionPath = `/get-session?neon_auth_session_verifier=${encodeURIComponent(verifier)}`;
+  try {
+    const response = await neonAuthFetch(c.env, sessionPath, c.req.header("Cookie"));
+    const result = response.ok ? await response.clone().json() as NeonSessionResponse : null;
+    const session = result?.session?.token ? await sessionFromToken(result.session.token, c.env) : null;
+    const destination = new URL(returnTo);
+    if (!response.ok) destination.searchParams.set("authError", "login-failed");
+    else if (!session) {
+      destination.pathname = "/login";
+      destination.search = "authError=not-authorized";
+    }
+    const headers = new Headers({ Location: destination.toString() });
+    copyAuthCookies(response, headers);
+    return new Response(null, { status: 302, headers });
+  } catch { return c.redirect(`${returnTo}?authError=login-failed`, 302); }
+});
+
+app.get("/auth/session", async (c) => {
+  const session = await readSession(c.req.raw, c.env);
+  if (!session) return c.json({ status: "error", data: null, error: "You do not have permission to use this app" }, 403);
+  return c.json({ status: "ok", data: { id: session.id, name: session.name || session.login, provider: "github", isGuest: false, createdAt: new Date().toISOString() }, error: null });
+});
+
+app.post("/auth/signout", async (c) => {
+  const response = await neonAuthFetch(c.env, "/sign-out", c.req.header("Cookie"), { method: "POST" });
+  const headers = new Headers();
+  copyAuthCookies(response, headers);
+  return new Response(null, { status: response.ok ? 204 : 401, headers });
+});
+
 app.get("/api/state", async (c) => {
   try {
     const userId = requireUserId(c.req.query("userId"));
-    const session = await readSession(c.req.raw, c.env.SESSION_SECRET);
+    const session = await readSession(c.req.raw, c.env);
     if (!session || session.id !== userId) return c.json({ status: "error", data: null, error: "Unauthorized" }, 401);
     const db = createDb(c.env);
     const [projectRows, taskRows, noteRows, eventRows] = await Promise.all([
@@ -133,7 +162,7 @@ app.put("/api/state", async (c) => {
   try {
     const body = await c.req.json();
     const userId = requireUserId(body.userId);
-    const session = await readSession(c.req.raw, c.env.SESSION_SECRET);
+    const session = await readSession(c.req.raw, c.env);
     if (!session || session.id !== userId) return c.json({ status: "error", data: null, error: "Unauthorized" }, 401);
     const db = createDb(c.env);
     const nextProjects = Array.isArray(body.projects) ? body.projects : [];
@@ -162,7 +191,7 @@ app.put("/api/state", async (c) => {
 
 app.get("/api/screenshots", async (c) => {
   const userId = requireUserId(c.req.query("userId"));
-  const session = await readSession(c.req.raw, c.env.SESSION_SECRET);
+  const session = await readSession(c.req.raw, c.env);
   if (!session || session.id !== userId) return c.json({ status: "error", data: null, error: "Unauthorized" }, 401);
   const projectId = c.req.query("projectId");
   const db = createDb(c.env);
@@ -174,7 +203,7 @@ app.post("/api/screenshots", async (c) => {
   try {
     const form = await c.req.formData();
     const userId = requireUserId(String(form.get("userId") || ""));
-    const session = await readSession(c.req.raw, c.env.SESSION_SECRET);
+    const session = await readSession(c.req.raw, c.env);
     if (!session || session.id !== userId) return c.json({ status: "error", data: null, error: "Unauthorized" }, 401);
     const projectId = String(form.get("projectId") || "");
     const file = form.get("file");

@@ -6,11 +6,9 @@ export type Env = {
   DATABASE_URL: string;
   CORS_ORIGIN: string;
   SCREENSHOTS: R2Bucket;
-  GITHUB_CLIENT_ID: string;
-  GITHUB_CLIENT_SECRET: string;
-  SESSION_SECRET: string;
   ALLOWED_USERS: string;
-  FRONTEND_URL: string;
+  NEON_AUTH_URL: string;
+  NEON_AUTH_JWKS_URL: string;
 };
 
 export function createDb(env: Env) {
