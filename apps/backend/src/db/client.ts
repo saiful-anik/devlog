@@ -6,7 +6,6 @@ export type Env = {
   DATABASE_URL: string;
   CORS_ORIGIN: string;
   SCREENSHOTS: R2Bucket;
-  ALLOWED_USERS: string;
   NEON_AUTH_URL: string;
   NEON_AUTH_JWKS_URL: string;
 };

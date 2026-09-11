@@ -16,12 +16,7 @@ app.use("/*", (c, next) => {
 });
 
 type Session = { id: string; login: string; email: string | null; name: string | null };
-type NeonSessionResponse = { session?: { token?: string }; user?: { id?: string; name?: string; email?: string; createdAt?: string } };
-
-function isAllowed(session: Session, allowedUsers: string) {
-  const allowed = allowedUsers.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
-  return allowed.length > 0 && (allowed.includes(session.login.toLowerCase()) || Boolean(session.email && allowed.includes(session.email.toLowerCase())));
-}
+type NeonSessionResponse = { session?: { token?: string }; user?: { id?: string; name?: string; email?: string; role?: string; createdAt?: string } };
 
 async function sessionFromToken(token: string, env: Env): Promise<Session | null> {
   if (!/^[A-Za-z0-9._-]{20,8192}$/.test(token)) return null;
@@ -39,9 +34,11 @@ async function sessionFromToken(token: string, env: Env): Promise<Session | null
   } catch { return null; }
 }
 
-function allowSession(session: Session, env: Env, neonUser?: NeonSessionResponse["user"]) {
-  if (neonUser?.id === session.id && typeof neonUser.email === "string") session.email = neonUser.email;
-  return isAllowed(session, env.ALLOWED_USERS) ? session : null;
+function allowSession(session: Session, neonUser?: NeonSessionResponse["user"]) {
+  if (neonUser?.id !== session.id || neonUser.role !== "admin") return null;
+  if (typeof neonUser.email === "string") session.email = neonUser.email;
+  if (typeof neonUser.name === "string") session.name = neonUser.name;
+  return session;
 }
 
 async function readSession(request: Request, env: Env): Promise<Session | null> {
@@ -52,10 +49,10 @@ async function readSession(request: Request, env: Env): Promise<Session | null> 
     const result = await response.json() as NeonSessionResponse;
     if (!result.session?.token) return null;
     const session = await sessionFromToken(result.session.token, env);
-    return session ? allowSession(session, env, result.user) : null;
+    return session ? allowSession(session, result.user) : null;
   }
   const session = await sessionFromToken(token, env);
-  return session ? allowSession(session, env) : null;
+  return null;
 }
 
 function allowedOrigins(env: Env) {
@@ -122,7 +119,7 @@ app.get("/auth/callback", async (c) => {
     const response = await neonAuthFetch(c.env, sessionPath, c.req.header("Cookie"));
     const result = response.ok ? await response.clone().json() as NeonSessionResponse : null;
     const verifiedSession = result?.session?.token ? await sessionFromToken(result.session.token, c.env) : null;
-    const session = verifiedSession ? allowSession(verifiedSession, c.env, result?.user) : null;
+    const session = verifiedSession ? allowSession(verifiedSession, result?.user) : null;
     const destination = new URL(returnTo);
     if (!response.ok) destination.searchParams.set("authError", "login-failed");
     else if (!session) {
