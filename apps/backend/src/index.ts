@@ -35,8 +35,13 @@ async function sessionFromToken(token: string, env: Env): Promise<Session | null
       email: typeof payload.email === "string" ? payload.email : null,
       name: typeof payload.name === "string" ? payload.name : null,
     };
-    return isAllowed(session, env.ALLOWED_USERS) ? session : null;
+    return session;
   } catch { return null; }
+}
+
+function allowSession(session: Session, env: Env, neonUser?: NeonSessionResponse["user"]) {
+  if (neonUser?.id === session.id && typeof neonUser.email === "string") session.email = neonUser.email;
+  return isAllowed(session, env.ALLOWED_USERS) ? session : null;
 }
 
 async function readSession(request: Request, env: Env): Promise<Session | null> {
@@ -45,10 +50,12 @@ async function readSession(request: Request, env: Env): Promise<Session | null> 
     const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
     if (!response.ok) return null;
     const result = await response.json() as NeonSessionResponse;
-    token = result.session?.token;
+    if (!result.session?.token) return null;
+    const session = await sessionFromToken(result.session.token, env);
+    return session ? allowSession(session, env, result.user) : null;
   }
-  if (!token) return null;
-  return sessionFromToken(token, env);
+  const session = await sessionFromToken(token, env);
+  return session ? allowSession(session, env) : null;
 }
 
 function allowedOrigins(env: Env) {
@@ -114,7 +121,8 @@ app.get("/auth/callback", async (c) => {
   try {
     const response = await neonAuthFetch(c.env, sessionPath, c.req.header("Cookie"));
     const result = response.ok ? await response.clone().json() as NeonSessionResponse : null;
-    const session = result?.session?.token ? await sessionFromToken(result.session.token, c.env) : null;
+    const verifiedSession = result?.session?.token ? await sessionFromToken(result.session.token, c.env) : null;
+    const session = verifiedSession ? allowSession(verifiedSession, c.env, result?.user) : null;
     const destination = new URL(returnTo);
     if (!response.ok) destination.searchParams.set("authError", "login-failed");
     else if (!session) {
