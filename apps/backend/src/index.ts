@@ -35,7 +35,7 @@ async function sessionFromToken(token: string, env: Env): Promise<Session | null
 }
 
 function allowSession(session: Session, neonUser?: NeonSessionResponse["user"]) {
-  if (neonUser?.id !== session.id || neonUser.role !== "admin") return null;
+  if (neonUser?.role !== "admin") return null;
   if (typeof neonUser.email === "string") session.email = neonUser.email;
   if (typeof neonUser.name === "string") session.name = neonUser.name;
   return session;
@@ -47,8 +47,14 @@ async function readSession(request: Request, env: Env): Promise<Session | null> 
     const response = await neonAuthFetch(env, "/get-session", request.headers.get("Cookie"));
     if (!response.ok) return null;
     const result = await response.json() as NeonSessionResponse;
+    console.log("Neon Auth session", JSON.stringify({
+      hasToken: Boolean(result.session?.token),
+      jwtSubject: result.session?.token ? "present" : "missing",
+      user: result.user ? { id: result.user.id, email: result.user.email, role: result.user.role, name: result.user.name } : null,
+    }));
     if (!result.session?.token) return null;
     const session = await sessionFromToken(result.session.token, env);
+    console.log("Neon Auth authorization", JSON.stringify({ tokenSubject: session?.id ?? null, userId: result.user?.id ?? null, role: result.user?.role ?? null, allowed: Boolean(session && allowSession({ ...session }, result.user)) }));
     return session ? allowSession(session, result.user) : null;
   }
   const session = await sessionFromToken(token, env);
