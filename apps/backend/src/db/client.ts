@@ -7,10 +7,13 @@ export type Env = {
   CORS_ORIGIN: string;
   SCREENSHOTS: R2Bucket;
   NEON_AUTH_URL: string;
-  NEON_AUTH_JWKS_URL: string;
 };
 
 export function createDb(env: Env) {
+  return drizzle({ client: createSql(env), schema });
+}
+
+export function createSql(env: Env) {
   if (!env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
-  return drizzle({ client: neon(env.DATABASE_URL), schema });
+  return neon(env.DATABASE_URL);
 }
