@@ -100,6 +100,34 @@ describe("ProjectDetail", () => {
     expect(savedProjects[0].tasks[0].description).toBe("updated details");
   });
 
+  it("adds new backlog tasks at the top", async () => {
+    projectsData[0].tasks.push({
+      id: "task-2",
+      title: "Task 2",
+      status: "backlog",
+      createdAt: "2026-04-11T00:00:00.000Z",
+      description: "",
+      reference: "",
+      order: 1,
+    });
+    render(<ProjectDetail />);
+
+    await screen.findByText("Project A");
+    fireEvent.click(screen.getByRole("button", { name: /add task/i }));
+    fireEvent.change(await screen.findByPlaceholderText("Task title"), { target: { value: "Newest task" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => {
+      expect(saveProjectsMock).toHaveBeenCalled();
+    });
+
+    const savedProjects = saveProjectsMock.mock.calls.at(-1)?.[0] as any[];
+    expect(savedProjects[0].tasks.filter((task: any) => task.status === "backlog").map((task: any) => task.title))
+      .toEqual(["Newest task", "Task 1", "Task 2"]);
+    expect(savedProjects[0].tasks.filter((task: any) => task.status === "backlog").map((task: any) => task.order))
+      .toEqual([0, 1, 2]);
+  });
+
   it("supports Enter save and Escape discard in details field", async () => {
     render(<ProjectDetail />);
 
