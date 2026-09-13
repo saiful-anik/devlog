@@ -231,10 +231,14 @@ export default function ProjectDetail() {
       createdAt: new Date().toISOString(),
       description: "",
       reference: "",
-      order: nextOrder(project.tasks, "backlog"),
+      order: 0,
     };
 
-    project.tasks.push(task);
+    // Make room at the start of the backlog so the newest task is shown first.
+    sortByOrder(project.tasks.filter((item) => item.status === "backlog")).forEach((item, index) => {
+      item.order = index + 1;
+    });
+    project.tasks.unshift(task);
     project.updatedAt = new Date().toISOString();
     setProject({ ...project });
     setTaskName("");
