@@ -1,4 +1,8 @@
-const configuredBaseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, "") ?? "";
+// The production frontend is hosted separately from the Worker API. An explicit
+// fallback keeps authentication and assets on the API origin when a deployment
+// environment variable was not configured.
+const configuredBaseUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, "")
+  ?? (import.meta.env.PROD ? "https://api.devlog.bysaiful.site" : "");
 
 export const apiUrl = (path: string) => `${configuredBaseUrl}${path}`;
 
