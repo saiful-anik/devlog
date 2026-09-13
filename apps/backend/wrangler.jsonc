@@ -24,7 +24,13 @@
   "env": {
     "staging": {
       "name": "devlog-api-staging",
-      "vars": { "CORS_ORIGIN": "https://staging.example.com" },
+      "vars": {
+        "CORS_ORIGIN": "https://staging.example.com",
+        "NEON_AUTH_URL": "https://ep-rough-bonus-b3sdrsbi.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth"
+      },
+      "r2_buckets": [
+        { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
+      ],
       "ratelimits": [
         { "name": "AUTH_RATE_LIMIT", "namespace_id": "901101", "simple": { "limit": 20, "period": 60 } },
         { "name": "USER_RATE_LIMIT", "namespace_id": "901102", "simple": { "limit": 120, "period": 60 } },
@@ -33,7 +39,16 @@
     },
     "production": {
       "name": "devlog-api-production",
-      "vars": { "CORS_ORIGIN": "https://devlog.bysaiful.site,https://devlog-b09.pages.dev" },
+      "routes": [
+        { "pattern": "api.devlog.bysaiful.site", "custom_domain": true }
+      ],
+      "vars": {
+        "CORS_ORIGIN": "https://devlog.bysaiful.site,https://devlog-b09.pages.dev",
+        "NEON_AUTH_URL": "https://ep-rough-bonus-b3sdrsbi.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth"
+      },
+      "r2_buckets": [
+        { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
+      ],
       "ratelimits": [
         { "name": "AUTH_RATE_LIMIT", "namespace_id": "901201", "simple": { "limit": 20, "period": 60 } },
         { "name": "USER_RATE_LIMIT", "namespace_id": "901202", "simple": { "limit": 120, "period": 60 } },
