@@ -28,6 +28,8 @@ interface ScreenshotUploadDialogProps {
   trigger?: React.ReactNode;
 }
 
+const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+
 export function ScreenshotUploadDialog({
   projectId,
   projectName,
@@ -60,7 +62,7 @@ export function ScreenshotUploadDialog({
       setClipboardStatus("loading");
       const items = await navigator.clipboard.read();
       for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith("image/"));
+        const imageType = item.types.find((type) => allowedImageTypes.has(type));
         if (!imageType) continue;
 
         const blob = await item.getType(imageType);
@@ -96,6 +98,10 @@ export function ScreenshotUploadDialog({
     if (!files?.length) return;
 
     const file = files[0];
+    if (!allowedImageTypes.has(file.type)) {
+      toast.error("Choose a PNG, JPEG, or WebP image");
+      return;
+    }
     const maxSize = await getScreenshotSizeLimit();
     if (file.size > maxSize) {
       toast.error(`File too large (${formatBytes(file.size)}). Max ${formatBytes(maxSize)} allowed.`);
@@ -138,8 +144,8 @@ export function ScreenshotUploadDialog({
         setCaption("");
         setOpen(false);
       }
-    } catch (error) {
-      toast.error(`Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } catch {
+      toast.error("Upload failed. Please try again.");
     } finally {
       setIsUploading(false);
     }
@@ -201,7 +207,7 @@ export function ScreenshotUploadDialog({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/png,image/jpeg,image/webp"
                 className="hidden"
                 onChange={(e) => handleFileSelect(e.target.files)}
               />

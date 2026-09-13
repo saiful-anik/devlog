@@ -12,12 +12,33 @@
   "r2_buckets": [
     { "binding": "SCREENSHOTS", "bucket_name": "devlog-screenshots" }
   ],
+  "ratelimits": [
+    { "name": "AUTH_RATE_LIMIT", "namespace_id": "901001", "simple": { "limit": 20, "period": 60 } },
+    { "name": "USER_RATE_LIMIT", "namespace_id": "901002", "simple": { "limit": 120, "period": 60 } },
+    { "name": "UPLOAD_RATE_LIMIT", "namespace_id": "901003", "simple": { "limit": 10, "period": 60 } }
+  ],
   "routes": [
     { "pattern": "api.devlog.bysaiful.site", "custom_domain": true }
   ],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "env": {
-    "staging": { "name": "devlog-api-staging", "vars": { "CORS_ORIGIN": "https://staging.example.com" } },
-    "production": { "name": "devlog-api-production", "vars": { "CORS_ORIGIN": "https://devlog.bysaiful.site,https://devlog-b09.pages.dev" } }
+    "staging": {
+      "name": "devlog-api-staging",
+      "vars": { "CORS_ORIGIN": "https://staging.example.com" },
+      "ratelimits": [
+        { "name": "AUTH_RATE_LIMIT", "namespace_id": "901101", "simple": { "limit": 20, "period": 60 } },
+        { "name": "USER_RATE_LIMIT", "namespace_id": "901102", "simple": { "limit": 120, "period": 60 } },
+        { "name": "UPLOAD_RATE_LIMIT", "namespace_id": "901103", "simple": { "limit": 10, "period": 60 } }
+      ]
+    },
+    "production": {
+      "name": "devlog-api-production",
+      "vars": { "CORS_ORIGIN": "https://devlog.bysaiful.site,https://devlog-b09.pages.dev" },
+      "ratelimits": [
+        { "name": "AUTH_RATE_LIMIT", "namespace_id": "901201", "simple": { "limit": 20, "period": 60 } },
+        { "name": "USER_RATE_LIMIT", "namespace_id": "901202", "simple": { "limit": 120, "period": 60 } },
+        { "name": "UPLOAD_RATE_LIMIT", "namespace_id": "901203", "simple": { "limit": 10, "period": 60 } }
+      ]
+    }
   }
 }

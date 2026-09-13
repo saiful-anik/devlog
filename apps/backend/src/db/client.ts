@@ -7,6 +7,9 @@ export type Env = {
   CORS_ORIGIN: string;
   SCREENSHOTS: R2Bucket;
   NEON_AUTH_URL: string;
+  AUTH_RATE_LIMIT: RateLimit;
+  USER_RATE_LIMIT: RateLimit;
+  UPLOAD_RATE_LIMIT: RateLimit;
 };
 
 export function createDb(env: Env) {
