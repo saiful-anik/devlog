@@ -13,15 +13,18 @@ type NeonAuthResponse = NeonSessionResponse & { data?: NeonSessionResponse };
 type RateLimiter = "AUTH_RATE_LIMIT" | "USER_RATE_LIMIT" | "UPLOAD_RATE_LIMIT";
 
 const app = new Hono<{ Bindings: Bindings }>();
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+// Timeline attachments are stored as data URLs by the web client. Base64 expands
+// the source file by about one third, plus a small URL header.
+const MAX_TIMELINE_IMAGE_LENGTH = Math.ceil(MAX_UPLOAD_BYTES * 4 / 3) + 1_024;
 const userIdSchema = z.string().trim().min(1).max(128);
 const idSchema = z.string().uuid();
 const timestampSchema = z.string().datetime({ offset: true });
 const taskSchema = z.object({ id: idSchema, title: z.string().trim().min(1).max(200), status: z.enum(["backlog", "in-progress", "completed"]), createdAt: timestampSchema, description: z.string().max(10_000).optional(), reference: z.string().max(2_048).optional(), order: z.number().int().min(0).max(10_000).optional() }).strict();
 const projectSchema = z.object({ id: idSchema, name: z.string().trim().min(1).max(200), description: z.string().max(10_000).optional(), tasks: z.array(taskSchema).max(200), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
 const noteSchema = z.object({ id: idSchema, title: z.string().max(200).optional(), content: z.string().min(1).max(100_000), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
-const timelineSchema = z.object({ id: idSchema, type: z.enum(["project", "task", "log", "screenshot", "custom"]), title: z.string().trim().min(1).max(200), description: z.string().max(10_000), image: z.string().max(2_048).optional(), projectId: idSchema.optional(), projectName: z.string().max(200).optional(), timestamp: timestampSchema }).strict();
+const timelineSchema = z.object({ id: idSchema, type: z.enum(["project", "task", "log", "screenshot", "custom"]), title: z.string().trim().min(1).max(200), description: z.string().max(10_000), image: z.string().max(MAX_TIMELINE_IMAGE_LENGTH).optional(), projectId: idSchema.optional(), projectName: z.string().max(200).optional(), timestamp: timestampSchema }).strict();
 const stateSchema = z.object({ userId: userIdSchema, projects: z.array(projectSchema).max(100), notes: z.array(noteSchema).max(500), timeline: z.array(timelineSchema).max(2_000) }).strict();
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 class AppError extends Error {
