@@ -49,7 +49,7 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+      <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route element={<RequireAuth><AppLayout /></RequireAuth>}>

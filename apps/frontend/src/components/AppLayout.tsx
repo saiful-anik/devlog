@@ -40,22 +40,22 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex min-h-screen md:h-screen md:overflow-hidden">
       <AppSidebar />
-      <main className="flex flex-1 min-h-0 flex-col overflow-y-auto p-8">
+      <main className="flex min-w-0 flex-1 min-h-0 flex-col overflow-y-auto p-4 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:p-6 sm:pb-[calc(5rem+env(safe-area-inset-bottom))] md:p-8">
         <div className="mb-6 flex justify-end">
           <div className="flex w-full max-w-2xl flex-wrap items-center justify-end gap-2 rounded-2xl border border-border bg-background/90 px-3 py-2 shadow-sm backdrop-blur">
-            <Badge variant="outline" className="flex items-center gap-2 border-border bg-transparent px-3 py-1 text-xs font-medium">
+            <Badge variant="outline" className="flex h-8 w-8 items-center justify-center border-border bg-transparent p-0 text-xs font-medium sm:h-auto sm:w-auto sm:gap-2 sm:px-3 sm:py-1">
               <span
                 className={`h-2 w-2 rounded-full ${
                   syncStatus === "syncing"
                     ? "bg-yellow-500"
                     : syncStatus === "error"
                       ? "bg-red-500"
-                      : "bg-emerald-500"
+                  : "bg-emerald-500"
                 }`}
               />
-              {syncStatus === "syncing" ? "Syncing..." : syncStatus === "error" ? "Sync error" : "Cloud sync"}
+              <span className="sr-only sm:not-sr-only">{syncStatus === "syncing" ? "Syncing..." : syncStatus === "error" ? "Sync error" : "Cloud sync"}</span>
             </Badge>
 
             <Badge variant="secondary" className="flex items-center gap-2 px-3 py-1 text-xs font-medium">
@@ -66,12 +66,14 @@ export default function AppLayout() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-2"
+              className="h-8 w-8 p-0 sm:w-auto sm:gap-2 sm:px-3"
               onClick={() => void handleSignOut()}
               disabled={isSigningOut}
+              aria-label={isSigningOut ? "Signing out" : "Sign out"}
+              title={isSigningOut ? "Signing out" : "Sign out"}
             >
               <LogOut className="h-4 w-4" />
-              {isSigningOut ? "Signing out..." : "Sign out"}
+              <span className="sr-only sm:not-sr-only">{isSigningOut ? "Signing out..." : "Sign out"}</span>
             </Button>
           </div>
         </div>
