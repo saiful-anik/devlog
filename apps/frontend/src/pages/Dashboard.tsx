@@ -74,11 +74,13 @@ export default function Dashboard() {
     setOpen(false);
   };
 
-  const firstProject = projects[0];
-  const completedTasks = firstProject?.tasks.filter(t => t.status === "completed").length ?? 0;
-  const totalTasks = firstProject?.tasks.length ?? 0;
-  const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const latestBacklog = firstProject?.tasks.filter(t => t.status === "backlog").slice(-1)[0];
+  const inProgressProjects = projects
+    .map((project) => ({
+      project,
+      inProgressTasks: project.tasks.filter((task) => task.status === "in-progress"),
+      completedTasks: project.tasks.filter((task) => task.status === "completed").length,
+    }))
+    .filter(({ inProgressTasks }) => inProgressTasks.length > 0);
 
   const statusColor = (type: string) => {
     if (type === "task") return "bg-info";
@@ -135,39 +137,41 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Project card or add project */}
-        {firstProject ? (
-          <div className="border border-border rounded-xl p-6 bg-card flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">{firstProject.name}</h2>
+        {/* In-progress projects */}
+        {inProgressProjects.length ? (
+          <section className="border border-border rounded-xl p-6 bg-card">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">In Progress</h2>
+                <p className="text-sm text-muted-foreground">Projects with active work</p>
+              </div>
               <FolderIcon />
             </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">Progress</span>
-                <span>{progress}%</span>
-              </div>
-              <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-primary to-info rounded-full transition-all" style={{ width: `${progress}%` }} />
-              </div>
+            <div className="space-y-3">
+              {inProgressProjects.map(({ project, inProgressTasks, completedTasks }) => {
+                const progress = project.tasks.length ? Math.round((completedTasks / project.tasks.length) * 100) : 0;
+                return (
+                  <button key={project.id} onClick={() => navigate(`/projects/${project.id}`)} className="w-full rounded-lg border border-border bg-secondary/50 p-4 text-left transition-colors hover:border-primary/50 hover:bg-secondary">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="truncate text-sm font-semibold">{project.name}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">{progress}%</span>
+                    </div>
+                    <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-background">
+                      <div className="h-full rounded-full bg-gradient-to-r from-primary to-info" style={{ width: `${progress}%` }} />
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">In progress: <span className="text-foreground">{inProgressTasks.map((task) => task.title).join(", ")}</span></p>
+                  </button>
+                );
+              })}
             </div>
-            <p className="text-sm text-muted-foreground">Tasks: {completedTasks}/{totalTasks}</p>
-            <div className="flex items-center justify-between border-t border-border pt-4 mt-auto">
-              <span className="text-xs text-muted-foreground">Created: {new Date(firstProject.createdAt).toLocaleDateString()}</span>
-              <button onClick={() => navigate(`/projects/${firstProject.id}`)} className="text-sm font-medium text-foreground hover:text-primary flex items-center gap-1">View →</button>
-            </div>
-            {latestBacklog && (
-              <div className="border border-border rounded-lg p-4 bg-secondary/50 mt-2">
-                <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">≡ Latest Backlog Task</p>
-                <p className="text-sm font-medium">{latestBacklog.title}</p>
-              </div>
-            )}
-          </div>
+          </section>
         ) : (
-          <button onClick={() => setOpen(true)} className="border-2 border-dashed border-border rounded-xl p-12 flex flex-col items-center justify-center gap-3 hover:border-primary/50 transition-colors">
-            <Plus className="w-6 h-6 text-muted-foreground" />
-            <span className="text-muted-foreground font-medium">Add Project</span>
-          </button>
+          <section className="border-2 border-dashed border-border rounded-xl p-12 flex flex-col items-center justify-center gap-3">
+            <FolderIcon />
+            <h2 className="font-semibold">No projects in progress</h2>
+            <p className="text-center text-sm text-muted-foreground">Move a task to In Progress to see its project here.</p>
+            {!projects.length && <Button variant="outline" onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />Add Project</Button>}
+          </section>
         )}
 
         {/* Recent Activity */}

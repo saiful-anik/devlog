@@ -14,6 +14,7 @@ export default defineConfig(({ mode }) => ({
     },
     proxy: {
       "/api": "http://localhost:8787",
+      "/auth": "http://localhost:8787",
       "/health": "http://localhost:8787",
     },
   },

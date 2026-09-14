@@ -12,7 +12,8 @@ export default function AppSidebar() {
   const location = useLocation();
 
   return (
-    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
+    <>
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
       <div className="flex items-center gap-2 px-6 py-5">
         <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
           <FolderKanban className="w-4 h-4 text-primary-foreground" />
@@ -38,6 +39,26 @@ export default function AppSidebar() {
           );
         })}
       </nav>
-    </aside>
+      </aside>
+
+      <nav aria-label="Primary navigation" className="fixed inset-x-0 bottom-0 z-50 flex h-[calc(4rem+env(safe-area-inset-bottom))] items-start justify-around border-t border-sidebar-border bg-sidebar/95 px-2 pt-2 backdrop-blur md:hidden">
+        {links.map(({ to, label, icon: Icon }) => {
+          const isActive = to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              aria-current={isActive ? "page" : undefined}
+              className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-1 text-[11px] font-medium transition-colors ${
+                isActive ? "text-primary" : "text-sidebar-foreground hover:text-foreground"
+              }`}
+            >
+              <Icon className={`h-5 w-5 ${isActive ? "fill-primary/15" : ""}`} />
+              <span className="truncate">{label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
+    </>
   );
 }
