@@ -8,10 +8,10 @@ type Bindings = Env;
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use("/*", (c, next) => {
-  const requestedOrigin = c.req.header("Origin");
-  const allowedOrigins = c.env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
-  const origin = requestedOrigin && allowedOrigins.includes(requestedOrigin) ? requestedOrigin : allowedOrigins[0];
-  return cors({ origin, credentials: true })(c, next);
+  return cors({
+    origin: (requestedOrigin) => isAllowedOrigin(requestedOrigin, c.env) ? requestedOrigin : undefined,
+    credentials: true,
+  })(c, next);
 });
 
 type Session = { id: string; login: string; email: string | null; name: string | null };
@@ -37,6 +37,17 @@ async function readSession(request: Request, env: Env): Promise<Session | null> 
 
 function allowedOrigins(env: Env) {
   return env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+}
+
+function isAllowedOrigin(origin: string, env: Env) {
+  if (allowedOrigins(env).includes(origin)) return true;
+  try {
+    const url = new URL(origin);
+    // Cloudflare Pages creates preview URLs like <hash>.devlog-b09.pages.dev.
+    return url.protocol === "https:" && url.hostname.endsWith(".devlog-b09.pages.dev");
+  } catch {
+    return false;
+  }
 }
 
 function safeReturnTo(value: string | null | undefined, env: Env) {

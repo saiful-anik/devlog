@@ -18,6 +18,6 @@
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "env": {
     "staging": { "name": "devlog-api-staging", "vars": { "CORS_ORIGIN": "https://staging.example.com" } },
-    "production": { "name": "devlog-api-production", "vars": { "CORS_ORIGIN": "https://example.com" } }
+    "production": { "name": "devlog-api-production", "vars": { "CORS_ORIGIN": "https://devlog.bysaiful.site,https://devlog-b09.pages.dev" } }
   }
 }

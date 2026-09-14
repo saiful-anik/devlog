@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiUrl } from "@/lib/api";
 
 export interface Task { id: string; title: string; status: "backlog" | "in-progress" | "completed"; createdAt: string; description?: string; reference?: string; order?: number; }
 export interface Project { id: string; name: string; description?: string; tasks: Task[]; createdAt: string; updatedAt: string; }
@@ -22,7 +22,7 @@ const setStatus = (next: typeof status) => { status = next; syncListeners.forEac
 export const getCachedProjects = () => structuredClone(cachedProjects);
 export const getCachedNotes = () => structuredClone(cachedNotes);
 export const getCachedTimeline = () => structuredClone(cachedTimeline);
-export const resolveImageSrc = (value?: string) => value || "";
+export const resolveImageSrc = (value?: string) => value?.startsWith("/api/") ? apiUrl(value) : value || "";
 export const getScreenshotSizeLimit = async () => 5 * 1024 * 1024;
 export const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)}MB`;
 export class FileSizeError extends Error { constructor(public actualSize: number) { super(`File too large (${formatBytes(actualSize)}). Max 5MB allowed.`); this.name = "FileSizeError"; } }
