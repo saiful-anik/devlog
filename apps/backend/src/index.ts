@@ -55,7 +55,15 @@ async function requireSession(c: AppContext) { const session = await readSession
 function allowedOrigins(env: Env) { return env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean); }
 function isAllowedOrigin(origin: string, env: Env) { if (allowedOrigins(env).includes(origin)) return true; try { const url = new URL(origin); return url.protocol === "https:" && url.hostname.endsWith(".devlog-b09.pages.dev"); } catch { return false; } }
 function safeReturnTo(value: string | undefined, env: Env) { const fallback = allowedOrigins(env)[0] || "http://localhost:8080"; try { const url = new URL(value || fallback); return allowedOrigins(env).includes(url.origin) ? url.toString() : fallback; } catch { return fallback; } }
-function copyAuthCookies(source: Response, target: Headers) { const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : []; for (const cookie of cookies) target.append("Set-Cookie", cookie); }
+function copyAuthCookies(source: Response, target: Headers) {
+  const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : [];
+  // These cookies are issued by Neon but are deliberately relayed through our
+  // API origin so the web app can use them. `Partitioned` is not consistently
+  // supported by Safari in this redirect chain; Safari can then omit the cookie
+  // from /auth/session after GitHub returns. The cookie remains host-only,
+  // Secure, HttpOnly, and SameSite=None without that attribute.
+  for (const cookie of cookies) target.append("Set-Cookie", cookie.replace(/;\s*Partitioned\b/gi, ""));
+}
 function clientKey(c: AppContext) { return c.req.header("cf-connecting-ip") || c.req.header("cf-ray") || "unknown"; }
 async function enforceRateLimit(c: AppContext, limiter: RateLimiter, key: string) {
   try { if ((await c.env[limiter].limit({ key })).success) return null; c.header("Retry-After", "60"); c.header("RateLimit-Policy", "fixed;w=60"); return errorResponse(c, 429, "Too many requests"); }
