@@ -537,8 +537,16 @@ export default function ProjectDetail() {
           <ScreenshotUploadDialog 
             projectId={project.id} 
             projectName={project.name}
-            onUploadSuccess={async () => {
-              // Refresh screenshots after upload
+            onUploadSuccess={async (screenshot) => {
+              await store.addTimelineEvent({
+                type: "screenshot",
+                title: `Screenshot added to ${project.name}`,
+                description: screenshot.caption || "Project screenshot uploaded.",
+                image: screenshot.file_path,
+                projectId: project.id,
+                projectName: project.name,
+              });
+              // Refresh screenshots after upload.
               if (!id) return;
               const user = await getSession();
               if (!user) return;
