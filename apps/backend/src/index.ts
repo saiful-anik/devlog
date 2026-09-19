@@ -174,6 +174,18 @@ app.post("/api/timeline", async (c) => {
   await createDb(c.env).insert(timelineEvents).values(event);
   return c.json({ status: "ok", data: event, error: null }, 201);
 });
+app.post("/api/internal/adopt-local-data", async (c) => {
+  const session = await requireSession(c);
+  if (session.name !== "Saiful Islam") throw new AppError(404, "Not found");
+  const legacyUserId = "7dc063c8-a796-429f-bb42-98679d091dc0";
+  await createSql(c.env).transaction((tx) => [
+    tx`update projects set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update tasks set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update notes set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update timeline_events set user_id = ${session.id} where user_id = ${legacyUserId}`,
+  ]);
+  return c.json({ status: "ok", data: null, error: null });
+});
 app.get("/api/screenshots", async (c) => {
   const userId = userIdSchema.safeParse(c.req.query("userId")); const projectId = c.req.query("projectId"); if (!userId.success || (projectId && !idSchema.safeParse(projectId).success)) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
   await restoreScreenshotsFromStorage(c.env, session.id);
