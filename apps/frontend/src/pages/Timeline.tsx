@@ -1,20 +1,41 @@
-import { useEffect, useRef, useState } from "react";
-import { Calendar, ImagePlus, Plus, X } from "lucide-react";
-import { formatBytes, getScreenshotSizeLimit, resolveImageSrc, store, type TimelineEvent } from "@/lib/store";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle2, ClipboardList, FolderPlus, Image, ImagePlus, LoaderCircle, Plus, Sparkles, X, type LucideIcon } from "lucide-react";
+import { formatBytes, getCachedTimeline, getScreenshotSizeLimit, resolveImageSrc, store, type TimelineEvent } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { useStoreSubscription } from "@/hooks/useStoreSubscription";
+
+type EventVisual = { label: string; Icon: LucideIcon; accent: string; badge: string; marker: string };
+
+const eventVisuals: Record<TimelineEvent["type"], EventVisual> = {
+  project: { label: "Project", Icon: FolderPlus, accent: "border-l-emerald-500", badge: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300", marker: "bg-emerald-500" },
+  task: { label: "Task", Icon: CheckCircle2, accent: "border-l-sky-500", badge: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300", marker: "bg-sky-500" },
+  log: { label: "Log", Icon: ClipboardList, accent: "border-l-violet-500", badge: "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300", marker: "bg-violet-500" },
+  screenshot: { label: "Screenshot", Icon: Image, accent: "border-l-amber-500", badge: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300", marker: "bg-amber-500" },
+  custom: { label: "Update", Icon: Sparkles, accent: "border-l-primary", badge: "border-primary/30 bg-primary/10 text-primary", marker: "bg-primary" },
+};
 
 export default function Timeline() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [image, setImage] = useState("");
   const [clipboardStatus, setClipboardStatus] = useState<"idle" | "loading" | "empty" | "error">("idle");
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { void store.getTimeline().then(setEvents); }, []);
+  useEffect(() => {
+    void store.getTimelinePage().then((page) => {
+      setEvents(page.events);
+      setNextCursor(page.nextCursor);
+    });
+  }, []);
+  useStoreSubscription(["timeline"], () => setEvents((current) => mergeTimelineEvents(current, getCachedTimeline())));
 
   const addEvent = async () => {
     if (!title.trim()) return;
@@ -25,6 +46,28 @@ export default function Timeline() {
     setImage("");
     setClipboardStatus("idle");
   };
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const page = await store.getTimelinePage(nextCursor);
+      setEvents((current) => mergeTimelineEvents(current, page.events));
+      setNextCursor(page.nextCursor);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, nextCursor]);
+
+  useEffect(() => {
+    const target = loadMoreRef.current;
+    if (!target || !nextCursor) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) void loadMore();
+    }, { rootMargin: "80px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [loadMore, nextCursor]);
 
   const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -66,7 +109,7 @@ export default function Timeline() {
     }
   };
 
-  return <div className="mx-auto max-w-3xl">
+  return <div className="mx-auto max-w-3xl pb-20">
     <h1 className="mb-8 text-3xl font-bold">Timeline</h1>
     <section className="mb-8 rounded-xl border bg-card p-5">
       <Input className="mb-3" placeholder="What happened?" value={title} onChange={(event) => setTitle(event.target.value)} />
@@ -98,13 +141,56 @@ export default function Timeline() {
       <Button onClick={() => void addEvent()}><Plus className="mr-2 h-4 w-4" />Add event</Button>
     </section>
     <div className="space-y-3">
-      {events.map((event) => <article key={event.id} className="rounded-xl border bg-card p-5">
-        <div className="mb-1 flex items-center gap-2 font-semibold"><Calendar className="h-4 w-4" />{event.title}</div>
-        {event.description && <p className="text-sm text-muted-foreground">{event.description}</p>}
-        {event.image && <img src={resolveImageSrc(event.image)} alt={`Attachment for ${event.title}`} className="mt-3 max-h-80 rounded-lg border" />}
-        <time className="mt-3 block text-xs text-muted-foreground">{new Date(event.timestamp).toLocaleString()}</time>
-      </article>)}
+      {events.map((event) => {
+        const visual = eventVisuals[event.type];
+        const EventIcon = visual.Icon;
+
+        return <article key={event.id} className={`relative overflow-hidden rounded-xl border border-l-4 bg-card p-5 shadow-sm transition-shadow hover:shadow-md ${visual.accent}`}>
+          <div className="flex gap-4">
+            <div className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm ${visual.marker}`}>
+              <EventIcon className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className={`gap-1.5 px-2 py-0.5 text-[11px] font-semibold ${visual.badge}`}>
+                  <EventIcon className="h-3 w-3" aria-hidden="true" />
+                  {visual.label}
+                </Badge>
+                {event.projectName && <Badge variant="secondary" className="max-w-full truncate px-2 py-0.5 text-[11px] font-medium">{event.projectName}</Badge>}
+                <time dateTime={event.timestamp} title={new Date(event.timestamp).toLocaleString()} className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
+                  {timeAgo(event.timestamp)}
+                </time>
+              </div>
+              <h2 className="text-base font-semibold leading-snug text-foreground">{event.title}</h2>
+              {event.description && <p className="mt-1.5 text-sm leading-6 text-muted-foreground">{event.description}</p>}
+              {event.image && <div className="mt-4 overflow-hidden rounded-lg border bg-muted/30">
+                <img src={resolveImageSrc(event.image)} alt={`Attachment for ${event.title}`} className="max-h-80 w-full object-contain" />
+              </div>}
+            </div>
+          </div>
+        </article>;
+      })}
       {!events.length && <p className="text-sm text-muted-foreground">No events yet.</p>}
+      {nextCursor && <div ref={loadMoreRef} className="flex h-14 items-center justify-center" aria-live="polite">
+        {isLoadingMore && <span className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="h-4 w-4 animate-spin" />Loading more events…</span>}
+      </div>}
     </div>
   </div>;
+}
+
+function mergeTimelineEvents(current: TimelineEvent[], incoming: TimelineEvent[]) {
+  const unique = new Map(current.map((event) => [event.id, event]));
+  for (const event of incoming) unique.set(event.id, event);
+  return [...unique.values()].sort((first, second) => new Date(second.timestamp).getTime() - new Date(first.timestamp).getTime());
+}
+
+function timeAgo(timestamp: string) {
+  const elapsed = Date.now() - new Date(timestamp).getTime();
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return days < 7 ? `${days}d ago` : new Date(timestamp).toLocaleDateString();
 }

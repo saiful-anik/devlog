@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
@@ -24,6 +24,7 @@ const taskSchema = z.object({ id: idSchema, title: z.string().trim().min(1).max(
 const projectSchema = z.object({ id: idSchema, name: z.string().trim().min(1).max(200), description: z.string().max(10_000).optional(), tasks: z.array(taskSchema).max(200), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
 const noteSchema = z.object({ id: idSchema, title: z.string().max(200).optional(), content: z.string().min(1).max(100_000), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
 const timelineSchema = z.object({ id: idSchema, type: z.enum(["project", "task", "log", "screenshot", "custom"]), title: z.string().trim().min(1).max(200), description: z.string().max(10_000), image: z.string().max(MAX_TIMELINE_IMAGE_LENGTH).optional(), projectId: idSchema.optional(), projectName: z.string().max(200).optional(), timestamp: timestampSchema }).strict();
+const timelineCreateSchema = timelineSchema.omit({ id: true, timestamp: true });
 const stateSchema = z.object({ userId: userIdSchema, scope: z.enum(["projects", "notes", "timeline"]).optional(), projects: z.array(projectSchema).max(100), notes: z.array(noteSchema).max(500), timeline: z.array(timelineSchema).max(2_000) }).strict();
 const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -55,6 +56,15 @@ async function requireSession(c: AppContext) { const session = await readSession
 function allowedOrigins(env: Env) { return env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean); }
 function isAllowedOrigin(origin: string, env: Env) { if (allowedOrigins(env).includes(origin)) return true; try { const url = new URL(origin); return url.protocol === "https:" && url.hostname.endsWith(".devlog-b09.pages.dev"); } catch { return false; } }
 function safeReturnTo(value: string | undefined, env: Env) { const fallback = allowedOrigins(env)[0] || "http://localhost:8080"; try { const url = new URL(value || fallback); return allowedOrigins(env).includes(url.origin) ? url.toString() : fallback; } catch { return fallback; } }
+function authCallbackUrl(c: AppContext, returnTo: string) {
+  const returnToUrl = new URL(returnTo);
+  const requestUrl = new URL(c.req.url);
+  // Wrangler preserves the configured custom route in c.req.url during local
+  // development. Neon Auth needs a callback it can actually reach locally.
+  return returnToUrl.hostname === "localhost" && requestUrl.hostname !== "localhost"
+    ? new URL("/auth/callback", "http://localhost:8787")
+    : new URL("/auth/callback", requestUrl);
+}
 function copyAuthCookies(source: Response, target: Headers) {
   const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : [];
   // These cookies are issued by Neon but are deliberately relayed through our
@@ -90,6 +100,24 @@ async function restoreScreenshotsFromStorage(env: Env, userId: string) {
 
   if (recovered.length) await db.insert(projectScreenshots).values(recovered).onConflictDoNothing();
 }
+async function restoreScreenshotTimeline(env: Env, userId: string) {
+  await restoreScreenshotsFromStorage(env, userId);
+  const db = createDb(env);
+  const [screenshots, userProjects, existingEvents] = await Promise.all([
+    db.select().from(projectScreenshots).where(eq(projectScreenshots.userId, userId)),
+    db.select().from(projects).where(eq(projects.userId, userId)),
+    db.select().from(timelineEvents).where(eq(timelineEvents.userId, userId)),
+  ]);
+  const projectNames = new Map(userProjects.map((project) => [project.id, project.title]));
+  const existingImages = new Set(existingEvents.map((event) => (event.payload as { image?: unknown }).image).filter((image): image is string => typeof image === "string"));
+  const recovered = screenshots.flatMap((screenshot) => {
+    const image = `/api/assets/${encodeURIComponent(screenshot.objectKey)}`;
+    const projectName = projectNames.get(screenshot.projectId);
+    if (!projectName || existingImages.has(image)) return [];
+    return [{ id: crypto.randomUUID(), userId, projectId: screenshot.projectId, eventType: "screenshot", payload: { title: `Screenshot added to ${projectName}`, description: screenshot.caption || "Project screenshot uploaded.", image, projectName }, occurredAt: screenshot.createdAt }];
+  });
+  if (recovered.length) await db.insert(timelineEvents).values(recovered);
+}
 function clientKey(c: AppContext) { return c.req.header("cf-connecting-ip") || c.req.header("cf-ray") || "unknown"; }
 async function enforceRateLimit(c: AppContext, limiter: RateLimiter, key: string) {
   try { if ((await c.env[limiter].limit({ key })).success) return null; c.header("Retry-After", "60"); c.header("RateLimit-Policy", "fixed;w=60"); return errorResponse(c, 429, "Too many requests"); }
@@ -106,8 +134,8 @@ function assertImageSignature(bytes: Uint8Array, contentType: string) {
 app.get("/health", async (c) => { try { await createDb(c.env).execute("select 1"); return c.json({ status: "ok", data: { database: "connected" }, error: null }); } catch { return errorResponse(c, 503, "Database unavailable"); } });
 app.get("/auth/github", async (c) => {
   const limited = await enforceRateLimit(c, "AUTH_RATE_LIMIT", `auth:${clientKey(c)}`); if (limited) return limited;
-  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env); const callbackUrl = new URL("/auth/callback", c.req.url); callbackUrl.searchParams.set("returnTo", returnTo);
-  try { const response = await neonAuthFetch(c.env, "/sign-in/social", c.req.header("Cookie"), { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(returnTo).origin }, body: JSON.stringify({ provider: "github", callbackURL: callbackUrl.toString(), disableRedirect: true }) }); const body = await response.json() as { url?: string }; if (!response.ok || !body.url || !body.url.startsWith("https://")) return errorResponse(c, 503, "GitHub login is unavailable"); const headers = new Headers({ Location: body.url }); copyAuthCookies(response, headers); return new Response(null, { status: 302, headers }); } catch { return errorResponse(c, 503, "GitHub login is unavailable"); }
+  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env); const callbackUrl = authCallbackUrl(c, returnTo); callbackUrl.searchParams.set("returnTo", returnTo);
+  try { const response = await neonAuthFetch(c.env, "/sign-in/social", c.req.header("Cookie"), { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(returnTo).origin }, body: JSON.stringify({ provider: "github", callbackURL: callbackUrl.toString(), disableRedirect: true }) }); const body = await response.json() as { url?: string }; if (!response.ok || !body.url || !body.url.startsWith("https://")) { console.error(JSON.stringify({ event: "github_login_unavailable", requestId: requestId(c), upstreamStatus: response.status })); return errorResponse(c, 503, "GitHub login is unavailable"); } const headers = new Headers({ Location: body.url }); copyAuthCookies(response, headers); return new Response(null, { status: 302, headers }); } catch (error) { console.error(JSON.stringify({ event: "github_login_request_failed", requestId: requestId(c), error: error instanceof Error ? error.name : "UnknownError" })); return errorResponse(c, 503, "GitHub login is unavailable"); }
 });
 app.get("/auth/callback", async (c) => {
   const limited = await enforceRateLimit(c, "AUTH_RATE_LIMIT", `auth:${clientKey(c)}`); if (limited) return limited;
@@ -118,6 +146,7 @@ app.get("/auth/session", async (c) => { const session = await requireSession(c);
 app.post("/auth/signout", async (c) => { const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited; const response = await neonAuthFetch(c.env, "/sign-out", c.req.header("Cookie"), { method: "POST" }); const headers = new Headers(); copyAuthCookies(response, headers); return new Response(null, { status: response.ok ? 204 : 401, headers }); });
 app.get("/api/state", async (c) => {
   const userId = userIdSchema.safeParse(c.req.query("userId")); const scope = z.enum(["projects", "notes", "timeline"]).safeParse(c.req.query("scope") || "projects"); if (!userId.success || !scope.success) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  if (scope.data === "timeline") await restoreScreenshotTimeline(c.env, session.id);
   const db = createDb(c.env); const projectRows = scope.data === "projects" ? await db.select().from(projects).where(eq(projects.userId, session.id)) : []; const taskRows = scope.data === "projects" ? await db.select().from(tasks).where(eq(tasks.userId, session.id)) : []; const noteRows = scope.data === "notes" ? await db.select().from(notes).where(eq(notes.userId, session.id)) : []; const eventRows = scope.data === "timeline" ? await db.select().from(timelineEvents).where(eq(timelineEvents.userId, session.id)) : []; return c.json({ status: "ok", data: { projects: projectRows, tasks: taskRows, notes: noteRows, timeline: eventRows }, error: null });
 });
 app.put("/api/state", async (c) => {
@@ -129,6 +158,21 @@ app.put("/api/state", async (c) => {
     return [tx`delete from timeline_events where user_id = ${session.id}`, ...nextTimeline.map((event) => tx`insert into timeline_events (id, user_id, project_id, event_type, payload, occurred_at) values (${event.id}, ${session.id}, ${event.projectId || null}, ${event.type}, ${JSON.stringify({ title: event.title, description: event.description, image: event.image, projectName: event.projectName })}::jsonb, ${new Date(event.timestamp).toISOString()})`)];
   });
   return c.json({ status: "ok", data: null, error: null });
+});
+app.get("/api/timeline", async (c) => {
+  const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  const limit = z.coerce.number().int().min(1).max(50).safeParse(c.req.query("limit") || "20"); const cursor = c.req.query("cursor"); const before = cursor ? timestampSchema.safeParse(cursor) : null; if (!limit.success || (cursor && !before?.success)) failValidation();
+  await restoreScreenshotTimeline(c.env, session.id);
+  const rows = await createDb(c.env).select().from(timelineEvents).where(before?.success ? and(eq(timelineEvents.userId, session.id), lt(timelineEvents.occurredAt, new Date(before.data))) : eq(timelineEvents.userId, session.id)).orderBy(desc(timelineEvents.occurredAt)).limit(limit.data + 1);
+  const events = rows.slice(0, limit.data); const nextCursor = rows.length > limit.data ? events.at(-1)?.occurredAt.toISOString() : null;
+  return c.json({ status: "ok", data: { events, nextCursor }, error: null });
+});
+app.post("/api/timeline", async (c) => {
+  const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  const parsed = timelineCreateSchema.safeParse(await parseJson(c)); if (!parsed.success) failValidation();
+  const event = { id: crypto.randomUUID(), userId: session.id, projectId: parsed.data.projectId || null, eventType: parsed.data.type, payload: { title: parsed.data.title, description: parsed.data.description, image: parsed.data.image, projectName: parsed.data.projectName }, occurredAt: new Date() };
+  await createDb(c.env).insert(timelineEvents).values(event);
+  return c.json({ status: "ok", data: event, error: null }, 201);
 });
 app.get("/api/screenshots", async (c) => {
   const userId = userIdSchema.safeParse(c.req.query("userId")); const projectId = c.req.query("projectId"); if (!userId.success || (projectId && !idSchema.safeParse(projectId).success)) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;

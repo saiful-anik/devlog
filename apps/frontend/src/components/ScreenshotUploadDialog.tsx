@@ -24,7 +24,7 @@ import { formatBytes, getScreenshotSizeLimit } from "@/lib/store";
 interface ScreenshotUploadDialogProps {
   projectId: string;
   projectName: string;
-  onUploadSuccess?: (screenshot: { id: string; file_path: string; caption?: string; created_at: string }) => void;
+  onUploadSuccess?: (screenshot: { id: string; file_path: string; caption?: string; created_at: string }) => void | Promise<void>;
   trigger?: React.ReactNode;
 }
 
@@ -138,7 +138,9 @@ export function ScreenshotUploadDialog({
       if (!response.ok || result.status !== "ok") throw new Error(result.error || "Upload failed");
       if (result.data) {
         toast.success("Screenshot uploaded successfully");
-        onUploadSuccess?.(result.data);
+        // Do not close the dialog until consumers have recorded the corresponding
+        // timeline event. This prevents navigation from racing that update.
+        await onUploadSuccess?.(result.data);
         setScreenshot(null);
         setScreenshotPreview(null);
         setCaption("");
