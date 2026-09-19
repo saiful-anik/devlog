@@ -4,6 +4,7 @@ import { formatBytes, getCachedTimeline, getScreenshotSizeLimit, resolveImageSrc
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
@@ -21,6 +22,8 @@ const eventVisuals: Record<TimelineEvent["type"], EventVisual> = {
 export default function Timeline() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [initialLoadFailed, setInitialLoadFailed] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -30,10 +33,17 @@ export default function Timeline() {
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let active = true;
     void store.getTimelinePage().then((page) => {
+      if (!active) return;
       setEvents(page.events);
       setNextCursor(page.nextCursor);
+    }).catch(() => {
+      if (active) setInitialLoadFailed(true);
+    }).finally(() => {
+      if (active) setIsInitialLoading(false);
     });
+    return () => { active = false; };
   }, []);
   useStoreSubscription(["timeline"], () => setEvents((current) => mergeTimelineEvents(current, getCachedTimeline())));
 
@@ -141,7 +151,8 @@ export default function Timeline() {
       <Button onClick={() => void addEvent()}><Plus className="mr-2 h-4 w-4" />Add event</Button>
     </section>
     <div className="space-y-3">
-      {events.map((event) => {
+      {isInitialLoading && <TimelineLoadingSkeleton />}
+      {!isInitialLoading && events.map((event) => {
         const visual = eventVisuals[event.type];
         const EventIcon = visual.Icon;
 
@@ -170,11 +181,23 @@ export default function Timeline() {
           </div>
         </article>;
       })}
-      {!events.length && <p className="text-sm text-muted-foreground">No events yet.</p>}
-      {nextCursor && <div ref={loadMoreRef} className="flex h-14 items-center justify-center" aria-live="polite">
+      {!isInitialLoading && initialLoadFailed && <p className="text-sm text-muted-foreground">Couldn’t load timeline events. Refresh the page to try again.</p>}
+      {!isInitialLoading && !initialLoadFailed && !events.length && <p className="text-sm text-muted-foreground">No events yet.</p>}
+      {!isInitialLoading && nextCursor && <div ref={loadMoreRef} className="flex h-14 items-center justify-center" aria-live="polite">
         {isLoadingMore && <span className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="h-4 w-4 animate-spin" />Loading more events…</span>}
       </div>}
     </div>
+  </div>;
+}
+
+function TimelineLoadingSkeleton() {
+  return <div className="space-y-3" aria-label="Loading timeline events">
+    {Array.from({ length: 3 }).map((_, index) => <div key={index} className="rounded-xl border border-l-4 border-l-muted bg-card p-5">
+      <div className="flex gap-4">
+        <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+        <div className="flex-1 space-y-3"><Skeleton className="h-4 w-28" /><Skeleton className="h-5 w-3/4" /><Skeleton className="h-4 w-1/2" /></div>
+      </div>
+    </div>)}
   </div>;
 }
 
