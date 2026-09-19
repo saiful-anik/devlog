@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { z } from "zod";
@@ -24,7 +24,8 @@ const taskSchema = z.object({ id: idSchema, title: z.string().trim().min(1).max(
 const projectSchema = z.object({ id: idSchema, name: z.string().trim().min(1).max(200), description: z.string().max(10_000).optional(), tasks: z.array(taskSchema).max(200), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
 const noteSchema = z.object({ id: idSchema, title: z.string().max(200).optional(), content: z.string().min(1).max(100_000), createdAt: timestampSchema, updatedAt: timestampSchema }).strict();
 const timelineSchema = z.object({ id: idSchema, type: z.enum(["project", "task", "log", "screenshot", "custom"]), title: z.string().trim().min(1).max(200), description: z.string().max(10_000), image: z.string().max(MAX_TIMELINE_IMAGE_LENGTH).optional(), projectId: idSchema.optional(), projectName: z.string().max(200).optional(), timestamp: timestampSchema }).strict();
-const stateSchema = z.object({ userId: userIdSchema, projects: z.array(projectSchema).max(100), notes: z.array(noteSchema).max(500), timeline: z.array(timelineSchema).max(2_000) }).strict();
+const timelineCreateSchema = timelineSchema.omit({ id: true, timestamp: true });
+const stateSchema = z.object({ userId: userIdSchema, scope: z.enum(["projects", "notes", "timeline"]).optional(), projects: z.array(projectSchema).max(100), notes: z.array(noteSchema).max(500), timeline: z.array(timelineSchema).max(2_000) }).strict();
 const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 class AppError extends Error {
@@ -55,7 +56,68 @@ async function requireSession(c: AppContext) { const session = await readSession
 function allowedOrigins(env: Env) { return env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean); }
 function isAllowedOrigin(origin: string, env: Env) { if (allowedOrigins(env).includes(origin)) return true; try { const url = new URL(origin); return url.protocol === "https:" && url.hostname.endsWith(".devlog-b09.pages.dev"); } catch { return false; } }
 function safeReturnTo(value: string | undefined, env: Env) { const fallback = allowedOrigins(env)[0] || "http://localhost:8080"; try { const url = new URL(value || fallback); return allowedOrigins(env).includes(url.origin) ? url.toString() : fallback; } catch { return fallback; } }
-function copyAuthCookies(source: Response, target: Headers) { const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : []; for (const cookie of cookies) target.append("Set-Cookie", cookie); }
+function authCallbackUrl(c: AppContext, returnTo: string) {
+  const returnToUrl = new URL(returnTo);
+  const requestUrl = new URL(c.req.url);
+  // Wrangler preserves the configured custom route in c.req.url during local
+  // development. Neon Auth needs a callback it can actually reach locally.
+  return returnToUrl.hostname === "localhost" && requestUrl.hostname !== "localhost"
+    ? new URL("/auth/callback", "http://localhost:8787")
+    : new URL("/auth/callback", requestUrl);
+}
+function copyAuthCookies(source: Response, target: Headers) {
+  const cookies = typeof source.headers.getSetCookie === "function" ? source.headers.getSetCookie() : [];
+  // These cookies are issued by Neon but are deliberately relayed through our
+  // API origin so the web app can use them. `Partitioned` is not consistently
+  // supported by Safari in this redirect chain; Safari can then omit the cookie
+  // from /auth/session after GitHub returns. The cookie remains host-only,
+  // Secure, HttpOnly, and SameSite=None without that attribute.
+  for (const cookie of cookies) target.append("Set-Cookie", cookie.replace(/;\s*Partitioned\b/gi, ""));
+}
+async function restoreScreenshotsFromStorage(env: Env, userId: string) {
+  const db = createDb(env);
+  const [existingRows, userProjects] = await Promise.all([
+    db.select().from(projectScreenshots).where(eq(projectScreenshots.userId, userId)),
+    db.select({ id: projects.id }).from(projects).where(eq(projects.userId, userId)),
+  ]);
+  const existingObjectKeys = new Set(existingRows.map((row) => row.objectKey));
+  const projectIds = new Set(userProjects.map((project) => project.id));
+  const recovered: Array<typeof projectScreenshots.$inferInsert> = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await env.SCREENSHOTS.list({ prefix: `${userId}/`, cursor });
+    for (const object of page.objects) {
+      if (existingObjectKeys.has(object.key)) continue;
+      const [objectUserId, projectId, screenshotId, ...rest] = object.key.split("/");
+      if (rest.length || objectUserId !== userId || !projectIds.has(projectId) || !idSchema.safeParse(projectId).success || !idSchema.safeParse(screenshotId).success) continue;
+      const metadata = await env.SCREENSHOTS.head(object.key);
+      if (!metadata || metadata.customMetadata?.userId !== userId || metadata.customMetadata?.projectId !== projectId) continue;
+      recovered.push({ id: screenshotId, userId, projectId, objectKey: object.key, caption: null, contentType: metadata.httpMetadata?.contentType || "application/octet-stream", createdAt: object.uploaded, updatedAt: object.uploaded });
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  if (recovered.length) await db.insert(projectScreenshots).values(recovered).onConflictDoNothing();
+}
+async function restoreScreenshotTimeline(env: Env, userId: string) {
+  await restoreScreenshotsFromStorage(env, userId);
+  const db = createDb(env);
+  const [screenshots, userProjects, existingEvents] = await Promise.all([
+    db.select().from(projectScreenshots).where(eq(projectScreenshots.userId, userId)),
+    db.select().from(projects).where(eq(projects.userId, userId)),
+    db.select().from(timelineEvents).where(eq(timelineEvents.userId, userId)),
+  ]);
+  const projectNames = new Map(userProjects.map((project) => [project.id, project.title]));
+  const existingImages = new Set(existingEvents.map((event) => (event.payload as { image?: unknown }).image).filter((image): image is string => typeof image === "string"));
+  const recovered = screenshots.flatMap((screenshot) => {
+    const image = `/api/assets/${encodeURIComponent(screenshot.objectKey)}`;
+    const projectName = projectNames.get(screenshot.projectId);
+    if (!projectName || existingImages.has(image)) return [];
+    return [{ id: crypto.randomUUID(), userId, projectId: screenshot.projectId, eventType: "screenshot", payload: { title: `Screenshot added to ${projectName}`, description: screenshot.caption || "Project screenshot uploaded.", image, projectName }, occurredAt: screenshot.createdAt }];
+  });
+  if (recovered.length) await db.insert(timelineEvents).values(recovered);
+}
 function clientKey(c: AppContext) { return c.req.header("cf-connecting-ip") || c.req.header("cf-ray") || "unknown"; }
 async function enforceRateLimit(c: AppContext, limiter: RateLimiter, key: string) {
   try { if ((await c.env[limiter].limit({ key })).success) return null; c.header("Retry-After", "60"); c.header("RateLimit-Policy", "fixed;w=60"); return errorResponse(c, 429, "Too many requests"); }
@@ -72,8 +134,8 @@ function assertImageSignature(bytes: Uint8Array, contentType: string) {
 app.get("/health", async (c) => { try { await createDb(c.env).execute("select 1"); return c.json({ status: "ok", data: { database: "connected" }, error: null }); } catch { return errorResponse(c, 503, "Database unavailable"); } });
 app.get("/auth/github", async (c) => {
   const limited = await enforceRateLimit(c, "AUTH_RATE_LIMIT", `auth:${clientKey(c)}`); if (limited) return limited;
-  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env); const callbackUrl = new URL("/auth/callback", c.req.url); callbackUrl.searchParams.set("returnTo", returnTo);
-  try { const response = await neonAuthFetch(c.env, "/sign-in/social", c.req.header("Cookie"), { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(returnTo).origin }, body: JSON.stringify({ provider: "github", callbackURL: callbackUrl.toString(), disableRedirect: true }) }); const body = await response.json() as { url?: string }; if (!response.ok || !body.url || !body.url.startsWith("https://")) return errorResponse(c, 503, "GitHub login is unavailable"); const headers = new Headers({ Location: body.url }); copyAuthCookies(response, headers); return new Response(null, { status: 302, headers }); } catch { return errorResponse(c, 503, "GitHub login is unavailable"); }
+  const returnTo = safeReturnTo(c.req.query("returnTo"), c.env); const callbackUrl = authCallbackUrl(c, returnTo); callbackUrl.searchParams.set("returnTo", returnTo);
+  try { const response = await neonAuthFetch(c.env, "/sign-in/social", c.req.header("Cookie"), { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(returnTo).origin }, body: JSON.stringify({ provider: "github", callbackURL: callbackUrl.toString(), disableRedirect: true }) }); const body = await response.json() as { url?: string }; if (!response.ok || !body.url || !body.url.startsWith("https://")) { console.error(JSON.stringify({ event: "github_login_unavailable", requestId: requestId(c), upstreamStatus: response.status })); return errorResponse(c, 503, "GitHub login is unavailable"); } const headers = new Headers({ Location: body.url }); copyAuthCookies(response, headers); return new Response(null, { status: 302, headers }); } catch (error) { console.error(JSON.stringify({ event: "github_login_request_failed", requestId: requestId(c), error: error instanceof Error ? error.name : "UnknownError" })); return errorResponse(c, 503, "GitHub login is unavailable"); }
 });
 app.get("/auth/callback", async (c) => {
   const limited = await enforceRateLimit(c, "AUTH_RATE_LIMIT", `auth:${clientKey(c)}`); if (limited) return limited;
@@ -83,17 +145,50 @@ app.get("/auth/callback", async (c) => {
 app.get("/auth/session", async (c) => { const session = await requireSession(c); return c.json({ status: "ok", data: { id: session.id, name: session.name || session.login, provider: "github", isGuest: false, createdAt: new Date().toISOString() }, error: null }); });
 app.post("/auth/signout", async (c) => { const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited; const response = await neonAuthFetch(c.env, "/sign-out", c.req.header("Cookie"), { method: "POST" }); const headers = new Headers(); copyAuthCookies(response, headers); return new Response(null, { status: response.ok ? 204 : 401, headers }); });
 app.get("/api/state", async (c) => {
-  const userId = userIdSchema.safeParse(c.req.query("userId")); if (!userId.success) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
-  const db = createDb(c.env); const [projectRows, taskRows, noteRows, eventRows] = await Promise.all([db.select().from(projects).where(eq(projects.userId, session.id)), db.select().from(tasks).where(eq(tasks.userId, session.id)), db.select().from(notes).where(eq(notes.userId, session.id)), db.select().from(timelineEvents).where(eq(timelineEvents.userId, session.id))]); return c.json({ status: "ok", data: { projects: projectRows, tasks: taskRows, notes: noteRows, timeline: eventRows }, error: null });
+  const userId = userIdSchema.safeParse(c.req.query("userId")); const scope = z.enum(["projects", "notes", "timeline"]).safeParse(c.req.query("scope") || "projects"); if (!userId.success || !scope.success) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  if (scope.data === "timeline") await restoreScreenshotTimeline(c.env, session.id);
+  const db = createDb(c.env); const projectRows = scope.data === "projects" ? await db.select().from(projects).where(eq(projects.userId, session.id)) : []; const taskRows = scope.data === "projects" ? await db.select().from(tasks).where(eq(tasks.userId, session.id)) : []; const noteRows = scope.data === "notes" ? await db.select().from(notes).where(eq(notes.userId, session.id)) : []; const eventRows = scope.data === "timeline" ? await db.select().from(timelineEvents).where(eq(timelineEvents.userId, session.id)) : []; return c.json({ status: "ok", data: { projects: projectRows, tasks: taskRows, notes: noteRows, timeline: eventRows }, error: null });
 });
 app.put("/api/state", async (c) => {
   const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited; const parsed = stateSchema.safeParse(await parseJson(c)); if (!parsed.success) failValidation(); if (session.id !== parsed.data.userId) throw new AppError(401, "Unauthorized");
-  const { projects: nextProjects, notes: nextNotes, timeline: nextTimeline } = parsed.data; const nextTasks = nextProjects.flatMap((project) => project.tasks.map((task) => ({ ...task, projectId: project.id })));
-  await createSql(c.env).transaction((tx) => [tx`delete from tasks where user_id = ${session.id}`, tx`delete from timeline_events where user_id = ${session.id}`, tx`delete from notes where user_id = ${session.id}`, tx`delete from projects where user_id = ${session.id}`, ...nextProjects.map((project) => tx`insert into projects (id, user_id, title, description, created_at, updated_at) values (${project.id}, ${session.id}, ${project.name}, ${project.description || null}, ${new Date(project.createdAt).toISOString()}, ${new Date(project.updatedAt).toISOString()})`), ...nextTasks.map((task) => tx`insert into tasks (id, user_id, project_id, title, status, details, resource_path, created_at) values (${task.id}, ${session.id}, ${task.projectId}, ${task.title}, ${task.status}, ${task.description || null}, ${task.reference || null}, ${new Date(task.createdAt).toISOString()})`), ...nextNotes.map((note) => tx`insert into notes (id, user_id, title, content, created_at, updated_at) values (${note.id}, ${session.id}, ${note.title || null}, ${note.content}, ${new Date(note.createdAt).toISOString()}, ${new Date(note.updatedAt).toISOString()})`), ...nextTimeline.map((event) => tx`insert into timeline_events (id, user_id, project_id, event_type, payload, occurred_at) values (${event.id}, ${session.id}, ${event.projectId || null}, ${event.type}, ${JSON.stringify({ title: event.title, description: event.description, image: event.image, projectName: event.projectName })}::jsonb, ${new Date(event.timestamp).toISOString()})`)]);
+  const scope = parsed.data.scope || "projects"; const { projects: nextProjects, notes: nextNotes, timeline: nextTimeline } = parsed.data; const nextTasks = nextProjects.flatMap((project) => project.tasks.map((task) => ({ ...task, projectId: project.id })));
+  await createSql(c.env).transaction((tx) => {
+    if (scope === "projects") return [tx`delete from tasks where user_id = ${session.id}`, ...nextProjects.map((project) => tx`insert into projects (id, user_id, title, description, created_at, updated_at) values (${project.id}, ${session.id}, ${project.name}, ${project.description || null}, ${new Date(project.createdAt).toISOString()}, ${new Date(project.updatedAt).toISOString()}) on conflict (id) do update set title = excluded.title, description = excluded.description, updated_at = excluded.updated_at where projects.user_id = ${session.id}`), ...nextTasks.map((task) => tx`insert into tasks (id, user_id, project_id, title, status, details, resource_path, created_at) values (${task.id}, ${session.id}, ${task.projectId}, ${task.title}, ${task.status}, ${task.description || null}, ${task.reference || null}, ${new Date(task.createdAt).toISOString()})`)];
+    if (scope === "notes") return [tx`delete from notes where user_id = ${session.id}`, ...nextNotes.map((note) => tx`insert into notes (id, user_id, title, content, created_at, updated_at) values (${note.id}, ${session.id}, ${note.title || null}, ${note.content}, ${new Date(note.createdAt).toISOString()}, ${new Date(note.updatedAt).toISOString()})`)];
+    return [tx`delete from timeline_events where user_id = ${session.id}`, ...nextTimeline.map((event) => tx`insert into timeline_events (id, user_id, project_id, event_type, payload, occurred_at) values (${event.id}, ${session.id}, ${event.projectId || null}, ${event.type}, ${JSON.stringify({ title: event.title, description: event.description, image: event.image, projectName: event.projectName })}::jsonb, ${new Date(event.timestamp).toISOString()})`)];
+  });
+  return c.json({ status: "ok", data: null, error: null });
+});
+app.get("/api/timeline", async (c) => {
+  const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  const limit = z.coerce.number().int().min(1).max(50).safeParse(c.req.query("limit") || "20"); const cursor = c.req.query("cursor"); const before = cursor ? timestampSchema.safeParse(cursor) : null; if (!limit.success || (cursor && !before?.success)) failValidation();
+  await restoreScreenshotTimeline(c.env, session.id);
+  const rows = await createDb(c.env).select().from(timelineEvents).where(before?.success ? and(eq(timelineEvents.userId, session.id), lt(timelineEvents.occurredAt, new Date(before.data))) : eq(timelineEvents.userId, session.id)).orderBy(desc(timelineEvents.occurredAt)).limit(limit.data + 1);
+  const events = rows.slice(0, limit.data); const nextCursor = rows.length > limit.data ? events.at(-1)?.occurredAt.toISOString() : null;
+  return c.json({ status: "ok", data: { events, nextCursor }, error: null });
+});
+app.post("/api/timeline", async (c) => {
+  const session = await requireSession(c); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  const parsed = timelineCreateSchema.safeParse(await parseJson(c)); if (!parsed.success) failValidation();
+  const event = { id: crypto.randomUUID(), userId: session.id, projectId: parsed.data.projectId || null, eventType: parsed.data.type, payload: { title: parsed.data.title, description: parsed.data.description, image: parsed.data.image, projectName: parsed.data.projectName }, occurredAt: new Date() };
+  await createDb(c.env).insert(timelineEvents).values(event);
+  return c.json({ status: "ok", data: event, error: null }, 201);
+});
+app.post("/api/internal/adopt-local-data", async (c) => {
+  const session = await requireSession(c);
+  if (session.name !== "Saiful Islam") throw new AppError(404, "Not found");
+  const legacyUserId = "7dc063c8-a796-429f-bb42-98679d091dc0";
+  await createSql(c.env).transaction((tx) => [
+    tx`update projects set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update tasks set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update notes set user_id = ${session.id} where user_id = ${legacyUserId}`,
+    tx`update timeline_events set user_id = ${session.id} where user_id = ${legacyUserId}`,
+  ]);
   return c.json({ status: "ok", data: null, error: null });
 });
 app.get("/api/screenshots", async (c) => {
   const userId = userIdSchema.safeParse(c.req.query("userId")); const projectId = c.req.query("projectId"); if (!userId.success || (projectId && !idSchema.safeParse(projectId).success)) failValidation(); const session = await requireSession(c); if (session.id !== userId.data) throw new AppError(401, "Unauthorized"); const limited = await enforceRateLimit(c, "USER_RATE_LIMIT", `user:${session.id}`); if (limited) return limited;
+  await restoreScreenshotsFromStorage(c.env, session.id);
   const rows = await createDb(c.env).select().from(projectScreenshots).where(eq(projectScreenshots.userId, session.id)); return c.json({ status: "ok", data: rows.filter((row) => !projectId || row.projectId === projectId).map((row) => ({ id: row.id, user_id: row.userId, project_id: row.projectId, file_path: `/api/assets/${encodeURIComponent(row.objectKey)}`, caption: row.caption, created_at: row.createdAt.toISOString(), updated_at: row.updatedAt.toISOString() })), error: null });
 });
 app.post("/api/screenshots", async (c) => {

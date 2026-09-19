@@ -13,7 +13,9 @@ export default function Dashboard() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>(getCachedTimeline());
   const [newName, setNewName] = useState("");
   const [open, setOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [projectsLoadFailed, setProjectsLoadFailed] = useState(false);
+  const [timelineLoadFailed, setTimelineLoadFailed] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -30,6 +32,8 @@ export default function Dashboard() {
 
         setProjects(projectsResult.status === "fulfilled" ? projectsResult.value : getCachedProjects());
         setTimeline(timelineResult.status === "fulfilled" ? timelineResult.value : getCachedTimeline());
+        setProjectsLoadFailed(projectsResult.status === "rejected");
+        setTimelineLoadFailed(timelineResult.status === "rejected");
       } finally {
         if (active) setIsLoading(false);
       }
@@ -138,7 +142,12 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* In-progress projects */}
-        {inProgressProjects.length ? (
+        {projectsLoadFailed ? (
+          <section className="border-2 border-dashed border-destructive/40 rounded-xl p-12 flex flex-col items-center justify-center gap-3">
+            <h2 className="font-semibold">Couldn’t load projects</h2>
+            <p className="text-center text-sm text-muted-foreground">Refresh the page to try again.</p>
+          </section>
+        ) : inProgressProjects.length ? (
           <section className="border border-border rounded-xl p-6 bg-card">
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -178,7 +187,9 @@ export default function Dashboard() {
         <div className="border border-dashed border-border rounded-xl p-6">
           <h2 className="text-xl font-bold mb-1">Recent Activity</h2>
           <p className="text-sm text-muted-foreground mb-4">Latest changes to your projects</p>
-          {recentActivity.length === 0 ? (
+          {timelineLoadFailed ? (
+            <p className="text-sm text-muted-foreground">Couldn’t load recent activity. Refresh the page to try again.</p>
+          ) : recentActivity.length === 0 ? (
             <p className="text-sm text-muted-foreground">No recent activity</p>
           ) : (
             <div className="flex flex-col gap-3">
