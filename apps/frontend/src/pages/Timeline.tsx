@@ -8,7 +8,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useStoreSubscription } from "@/hooks/useStoreSubscription";
-import { apiFetch } from "@/lib/api";
 
 type EventVisual = { label: string; Icon: LucideIcon; accent: string; badge: string; marker: string };
 
@@ -35,11 +34,7 @@ export default function Timeline() {
 
   useEffect(() => {
     let active = true;
-    void (async () => {
-      const adoption = await apiFetch("/api/internal/adopt-local-data", { method: "POST" });
-      if (!adoption.ok) throw new Error("Unable to adopt migrated data");
-      return store.getTimelinePage();
-    })().then((page) => {
+    void store.getTimelinePage().then((page) => {
       if (!active) return;
       setEvents(page.events);
       setNextCursor(page.nextCursor);
