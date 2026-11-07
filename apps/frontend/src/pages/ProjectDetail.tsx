@@ -653,7 +653,7 @@ export default function ProjectDetail() {
 
       {/* Screenshots Section */}
       {activeSection === "screenshots" && (
-        <div>
+        <div className="max-h-[min(65vh,42rem)] overflow-y-auto overscroll-contain rounded-lg pr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" tabIndex={0} aria-label="Project screenshots">
           {screenshots.length === 0 ? (
             <p className="text-sm text-muted-foreground">No screenshots yet. Upload one to get started.</p>
           ) : (
